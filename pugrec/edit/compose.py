@@ -443,6 +443,7 @@ def build(plan, out_path, crf=18, preset="medium", progress=True, jobs=4):
     import tempfile
     import time
     global _PLAN, _COUNTER
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)  # before rendering, not at the mux
     fps = plan["output"]["fps"]
     frames = plan["frames"]
     n = len(frames)

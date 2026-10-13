@@ -153,6 +153,11 @@ def cmd_build(a):
     sessions = resolve.load_sessions(sc)
     names = [o["name"] for o in sc["outputs"]] if a.output == "all" else [a.output]
     out_dir = a.out_dir or os.path.dirname(os.path.abspath(path))
+    try:  # now, not after minutes of rendering (the final mux can't create it)
+        os.makedirs(out_dir, exist_ok=True)
+    except OSError as e:
+        print(f"error: --out-dir {out_dir}: {e.strerror}", file=sys.stderr)
+        return 1
     rc = 0
     for name in names:
         if name not in [o["name"] for o in sc["outputs"]]:
