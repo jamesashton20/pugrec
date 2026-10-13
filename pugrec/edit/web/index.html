@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pugrec preview</title>
+<style>
+  :root {
+    --ink: #16171a; --panel: #1e2024; --line: #2c2f35; --text: #f1e4d9; --muted: #9a958f;
+    --orange: #ff6b2c; --warn: #f2b84b; --err: #ff5a5a; --radius: 6px;
+    --sans: "IBM Plex Sans", system-ui, sans-serif; --mono: "IBM Plex Mono", ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--ink); color: var(--text); font: 14px/1.4 var(--sans); }
+  body { display: grid; grid-template-rows: auto 1fr auto; grid-template-columns: 1fr 320px; height: 100vh; }
+  header { grid-column: 1 / -1; display: flex; align-items: center; gap: 16px; padding: 10px 16px;
+           border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  header .file { color: var(--muted); font-family: var(--mono); font-size: 12px; }
+  .tabs { display: flex; gap: 4px; margin-left: auto; }
+  .tabs button { background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: var(--radius);
+                 padding: 4px 10px; font: inherit; cursor: pointer; }
+  .tabs button.on { color: var(--text); border-color: var(--orange); }
+  #status { font-size: 12px; color: var(--muted); min-width: 140px; text-align: right; }
+  #status.err { color: var(--err); }
+  main { position: relative; display: grid; place-items: center; padding: 16px; min-height: 0; min-width: 0; overflow: hidden; }
+  canvas { background: #000; border-radius: var(--radius); }
+  #error { position: absolute; inset: 16px; display: none; background: rgba(22, 23, 26, .92); border: 1px solid var(--err);
+           border-radius: var(--radius); padding: 16px; font-family: var(--mono); white-space: pre-wrap; color: var(--err); }
+  aside { border-left: 1px solid var(--line); overflow-y: auto; padding: 12px; grid-row: 2 / 4; grid-column: 2; }
+  aside h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 8px 0; }
+  .scene { display: grid; grid-template-columns: 26px 1fr auto; gap: 6px; padding: 7px 8px; border-radius: var(--radius);
+           cursor: pointer; border: 1px solid transparent; }
+  .scene:hover { background: var(--panel); }
+  .scene.on { border-color: var(--orange); background: var(--panel); }
+  .scene .i { color: var(--muted); font-family: var(--mono); }
+  .scene .t { color: var(--muted); font-family: var(--mono); font-size: 12px; }
+  .scene.cut { opacity: .45; }
+  .warn { color: var(--warn); font-size: 12px; margin: 4px 0; }
+  footer { display: grid; grid-template-columns: auto auto 1fr; gap: 12px; align-items: center; padding: 10px 16px;
+           border-top: 1px solid var(--line); }
+  footer button { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: var(--radius);
+                  width: 40px; height: 32px; font-size: 15px; cursor: pointer; }
+  #time { font-family: var(--mono); font-size: 13px; color: var(--muted); min-width: 120px; }
+  #bar { position: relative; height: 34px; background: var(--panel); border-radius: var(--radius); cursor: pointer;
+         overflow: hidden; }
+  #bar .seg { position: absolute; top: 0; bottom: 0; border-right: 1px solid var(--ink); padding: 3px 6px; font-size: 11px;
+              color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #bar .seg.on { color: var(--text); background: rgba(255, 107, 44, .14); }
+  #bar .cut { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--warn); }
+  #bar .head { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--orange); pointer-events: none; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 12px; }
+  @media (max-width: 800px) {
+    body { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto auto; }
+    aside { grid-row: auto; grid-column: 1; border-left: 0; border-top: 1px solid var(--line); max-height: 30vh; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>pugrec preview</h1><span class="file" id="file"></span>
+  <div class="tabs" id="tabs"></div>
+  <span id="status">loading…</span>
+</header>
+<main>
+  <canvas id="c" width="1920" height="1080"></canvas>
+  <div id="error"></div>
+</main>
+<aside>
+  <h2>Scenes</h2>
+  <div id="scenes"></div>
+  <div id="warnings"></div>
+  <p class="hint">Space play/pause · ←/→ 1 s (Shift 5 s) · [ ] previous/next scene · Save edit.yaml to update.</p>
+</aside>
+<footer>
+  <button id="play" title="Play/pause (Space)">▶</button>
+  <span id="time">0.00 / 0.00</span>
+  <div id="bar"><div class="head" id="head"></div></div>
+</footer>
+<script src="/player.js"></script>
+</body>
+</html>

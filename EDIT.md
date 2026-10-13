@@ -1,0 +1,235 @@
+# Editing: the scene script (`edit.yaml`)
+
+An edit is a YAML file next to a recording that says, **scene by scene, what the viewer sees**.
+pugrec resolves it against the recording's timeline (windows, cursor, clicks, faces, transcript)
+into exact frames, previews it live in the browser, and builds MP4s - 16:9 and 9:16 from one script.
+
+```bash
+pugrec transcript SESSION          # words with timestamps (GPU) - enables captions and smart cuts
+pugrec draft SESSION               # a starting edit.yaml from what happened (or write one by hand)
+pugrec check SESSION               # validate; list scenes and their output times per output
+pugrec preview SESSION             # browser preview, updates every time edit.yaml is saved
+pugrec build SESSION               # build-main.mp4, build-vertical.mp4 (--output, --from/--to, --jobs)
+pugrec build SESSION --whatsapp    # plus build-<output>-whatsapp.mp4: plays inline in WhatsApp (< 16 MB)
+```
+
+**Times are source seconds** (the recording's clock, as in `session.jsonl` / `transcript.jsonl`),
+not output seconds. Cutting a pause never shifts the scenes after it. The recording keeps its
+warm-up (camera starting, password prompt, the 3-2-1 countdown), but **edits begin at the
+`start` marker** after the countdown: by default, and when a `timeline` segment has no `from`.
+To use the warm-up anyway, give a segment an explicit `from: 0`.
+
+## A complete example
+
+```yaml
+version: 1
+outputs:
+  - {name: main, size: 1920x1080}
+  - {name: vertical, size: 1080x1920}
+cuts:
+  pauses: 1.2                 # cut silences > 1.2 s (from the transcript), keeping 0.3 s each side
+  fillers: true               # cut um / uh / erm
+  ranges: [[41.0, 44.2]]      # and these, by hand
+style:
+  bubble: {corner: bottom-left, size: 0.26}
+  captions: {show: true}
+scenes:
+  - at: 0
+    label: Hello
+    shot: camera                                        # full-screen camera, face-centred
+  - at: 4.2
+    shot: {window: {class: google-chrome}, follow: true}  # a window, following it as it moves
+    transition: {move: 0.8}
+    bubble: {corner: bottom-right}                      # the camera bubble moves (and stays there)
+  - at: 9.0
+    shot: {window: {title: Grafana}, region: [0, 0.1, 0.5, 0.4]}   # part of a window
+  - at: 14.0
+    shot: {cursor: {zoom: 2.2}}                         # follow the mouse
+  - at: 20.0
+    shot: {split: [{window: {title: Grafana}}, camera], ratio: 0.65}
+    transition: {fade: 0.4}
+  - at: 26.0
+    shot: auto                                          # automatic: zoom on clicks, else focused window
+    fit: contain                                        # the whole view, blurred background around it
+    vertical: {shot: {cursor: {zoom: 1.5}}}             # different shot on the vertical output only
+```
+
+## Top level
+
+| Key | Meaning |
+| --- | --- |
+| `version` | `1` |
+| `outputs` | `[{name, size: WxH, fps}]` - default `main` 1920x1080 @ 60. Names are used for per-output overrides (`vertical:` in a scene). Sizes must be even. |
+| `cuts` | a list `[[from, to], ...]`, or `{pauses: s, fillers: bool, ranges: [...]}` (pauses/fillers need `transcript.jsonl`) |
+| `timeline` | instead of cuts: explicit segments `[{source, from, to}]` in order (splicing; reordering) |
+| `sources` | `{main: {session: .}}` (default). Other sources (sessions, videos, images) are planned. |
+| `audio` | `{source: mic-clean | raw | none}` - mic-clean (from `pugrec audio`) if it exists, else raw |
+| `style` | defaults, below |
+| `scenes` | the list of scenes, by `at` |
+| `intro` / `outro` | title cards before/after the video: `"Title"` or `{title, subtitle, duration}` |
+| `overlays` | reserved (picture-in-picture of other sources, later) |
+
+## Scenes
+
+Each scene lasts until the next scene's `at`.
+
+| Key | Meaning |
+| --- | --- |
+| `at` | source seconds where it starts |
+| `shot` | what to show (below) |
+| `fit` | `auto` (default) / `cover` / `contain` (below) |
+| `background` | for `contain`: `blur` (default) or a colour `"#16171a"` |
+| `transition` | into this scene: `cut`, `{move: s}`, `{fade: s}` (default `{move: 0.6}`) |
+| `bubble` | camera bubble: `{corner, size, margin, shape, show}`, `false` to hide, `true` to show. **Sticky**: applies until a later scene changes it |
+| `spotlight` | `false` / `true` / `{window, blur, dim}` for this scene only (default: the style's) |
+| `label` | name in the preview/check (default: described from the shot) |
+| `<output name>` | overrides for one output, e.g. `vertical: {shot: ..., fit: ...}` |
+
+### Shots
+
+| Shot | What it shows |
+| --- | --- |
+| `screen` | the whole monitor |
+| `camera` / `{camera: {zoom: 1.3}}` | the webcam, head and shoulders, centred on the face (`faces.jsonl`) |
+| `auto` / `{auto: {zoom: 2}}` | automatic: zooms in on clicks/typing/scrolling (slightly before they happen), otherwise frames the focused window |
+| `{window: SEL, follow: true, region: [x, y, w, h], padding: 0.04}` | a window. `follow` (default true) tracks it as it moves/resizes; `follow: false` freezes it where it was when the scene started. `region` = part of the window, fractions of its size. |
+| `{cursor: {zoom: 2, dead_zone: 0.2}}` | follows the mouse; the view only moves when the cursor leaves the middle `1 - 2*dead_zone` |
+| `{rect: [x, y, w, h]}` | a fixed screen area, pixels - or fractions of the screen if all values <= 1 |
+| `{split: [SHOT, SHOT], ratio: 0.5, layout: auto}` | two panes; `auto` = side by side on wide outputs, stacked on tall ones (`row`/`column` to force) |
+
+**Window selectors** (`SEL`): `{class: regex}`, `{title: regex}`, both, `{address: "0x..."}` (exact; the draft
+and `session.jsonl` list them), or `focused` / `{focused: true}` (whatever has focus, switching with it).
+A class/title selector is resolved once, when the scene starts (several matches: visible, then focused,
+then largest). If nothing matches, the scene shows the whole screen and `check` warns.
+
+### Fit: when the shape doesn't match the output
+
+Every shot has a target rectangle; the output (or split pane) has its own aspect.
+- `cover`: show more around the target until it fills the frame; if the screen runs out, crop.
+- `contain`: show exactly the target, centred, with a **blurred, dimmed copy** of the same view
+  behind it (or a colour: `background: "#16171a"`).
+- `auto` (default): `cover` unless that would cut off more than 15% of the target, then `contain`.
+  On a 5120x2160 screen, a 16:9 output of the whole screen is `contain`; on 9:16, most windows are.
+
+### Spotlight: one window sharp, the rest of the screen blurred
+
+```yaml
+style:
+  spotlight: {window: {address: "0x5616f5aa83e0"}, blur: 40, dim: 0.35}
+scenes:
+  - at: 66.9
+    spotlight: false          # this scene shows the whole desktop
+```
+Every view of the screen - window shots, cursor zooms, `auto`, `screen`, the screen pane of a
+split - keeps the spotlit window sharp and blurs and dims everything else, following the window
+if it moves. For a single-screen demo that's focus *and* privacy: other apps' text is unreadable.
+`window:` takes the same selectors as shots (`address`, `class`, `title`, `focused` - which follows
+focus). Per scene: `spotlight: false` / `true` / `{...}`, not sticky (the style applies otherwise).
+Zoomed in inside the window, nothing is blurred. Limits: anything outside the window's rectangle
+is blurred too (a menu or popup sticking out of it, the cursor when it leaves it), and anything
+*over* the window stays sharp (e.g. a notification popping up on top of it). `pugrec draft` turns
+it on for the window with the most focus time.
+
+### Transitions
+
+- `cut` - instant.
+- `{move: s}` - the virtual camera glides from the previous view to the new one (needs a single
+  full-frame view of the same source on both sides; otherwise it becomes a fade and `check` says so).
+- `{fade: s}` - crossfade.
+- `{sparkle: s}` - a crossfade with 4-point star sparkles twinkling across the frame.
+- `{sweep: s}` - the theme's sprite (`style.sparkle.image`) crosses the frame left to right,
+  revealing the next scene behind it, leaving a sparkle trail.
+`sparkle` and `sweep` are **a theme's signature, not a general effect**: they only work when the
+theme (or the edit) has a `sparkle:` section in its style - anywhere else `check` refuses them.
+They're deterministic, so the preview and the build show the same sparkles.
+The bubble animates to its new corner/size with the transition (0.5 s on a cut).
+
+## Style (defaults)
+
+```yaml
+style:
+  theme: null                # a theme name or path (below); its keys are the base for everything here
+  accent: "#ff6b2c"          # click rings, the spoken word in captions, the bar on title cards
+  bubble: {shape: circle, size: 0.26, corner: bottom-left, margin: 0.04, show: true,   # size/margin: of the shorter side
+           border: {color: "#f1e4d9", width: 3}}                                       # width px at 1080p; false = none
+  click_rings: true          # a ring on each click, in the accent colour
+  captions: {show: true, size: 0.045, position: auto, max_words: 6, highlight: true,   # auto = bottom / lower third on 9:16
+             font: IBM Plex Sans, weight: 600, color: "#f1e4d9",                       # any installed font family
+             background: "#16171a", background_opacity: 0.78,                           # the box behind the words
+             fix: {}}                # {Misheard: Right}; keys may be several words ("Field Pal": FieldPal),
+                                     # case-insensitive; edit.yaml's fix MERGES with the theme's
+  logo: null                 # {file: logo.png, corner: top-right, size: 0.12, margin: 0.03, opacity: 0.9}
+  card: {background: "#16171a", color: "#f1e4d9", font: null, duration: 3.0,         # intro/outro cards; font null = captions'
+         image: null, image_size: 0.12,   # image: a brand icon, centred above the title; size = its height / the shorter side
+         fade_in: null, fade_out: 0.4}    # seconds; fade_in null = 0 for the intro (frame 0 = thumbnail), 0.4 for the outro
+  spotlight: null            # {window: SEL, blur: 40, dim: 0.35}
+  sparkle:                   # only for themes that want the sparkle/sweep transitions (opt-in)
+    {colors: null,           # star colours; null = white + accent
+     image: null,            # the sweep's sprite (PNG/JPEG/WebP, relative to the file naming it)
+     image_size: 0.3,        # sprite height / the shorter side
+     pixelated: false,       # true: nearest-neighbour scaling, for pixel art
+     flip: false,            # mirror the sprite (it travels left to right)
+     count: 36}              # stars per burst / trail
+  background: "#16171a"      # behind splits
+  blur: 40                   # px at 1080p, blurred backgrounds
+  radius: 6                  # px at 1080p, rounded panes
+  gap: 0.02                  # split gap
+  padding: 0.04              # around a framed window
+  transition: {move: 0.6}    # default transition
+```
+The bubble hides automatically when the shot itself shows the camera. Captions appear when the
+recording has `transcript.jsonl`; the word being spoken is highlighted. Colours are `"#rrggbb"`.
+`logo.file` is PNG/JPEG/WebP (export SVGs first), relative to the file that names it; `size` is its
+width as a fraction of the output width (the height keeps the image's aspect).
+
+### Themes: a customer's or brand's look
+
+A theme is a YAML file of `style` keys (plus an optional `description`; `vocabulary:` - a list of
+names for the transcript, used by `pugrec transcript --theme NAME`; and default `intro:`/`outro:`
+cards), validated exactly like `style`. `style: {theme: acme}` loads `~/.config/pugrec/themes/acme.yaml` (or `theme: some/path.yaml`,
+relative to edit.yaml). Order: pugrec's defaults (the PugPal look) <- the theme <- edit.yaml's own
+`style` keys, key by key (`captions: {color: ...}` in edit.yaml changes only the colour). An unknown
+theme is an error listing the installed ones.
+```bash
+pugrec themes                # the installed themes and their descriptions
+pugrec themes --defaults     # the PugPal look as a complete theme file (a starting point)
+```
+**Getting names right.** Best at the source: give whisper the names, and the transcript (and so
+captions, cuts and drafts) spells them right - `pugrec transcript SESSION --prompt "FieldPal, Acme"`,
+`--theme acme` (the theme's `vocabulary`), and/or `vocabulary = ["FieldPal"]` in
+`~/.config/pugrec/config.toml` (always used). All three combine. `captions.fix` is the fallback for
+what still comes out wrong.
+```yaml
+# ~/.config/pugrec/themes/acme.yaml
+description: Acme Corp - blue on navy, logo top-right
+vocabulary: [Acme, AcmeCloud]
+accent: "#2f80ff"
+captions: {font: Inter, weight: 700, color: "#ffffff", background: "#0b1f3a"}
+bubble: {border: {color: "#2f80ff", width: 4}}
+card: {background: "#0b1f3a", color: "#ffffff"}
+logo: {file: acme-logo.png, corner: top-right, size: 0.1}   # next to the theme file
+```
+
+### Title cards: `intro` / `outro`
+
+Top-level keys: `intro: "Title"` or `intro: {title, subtitle, duration, fade_in, fade_out}` (and
+the same for `outro`). A card is a full-frame title in the theme's `card` colours with an accent bar - and
+`card.image` (a brand icon) big above the title - before/after the timeline, fading in and out,
+with silence underneath (the audio stays in sync). The logo watermark shows on cards too.
+The intro is **fully drawn on frame 0** by default (WhatsApp, LinkedIn and YouTube use the first
+frame as the thumbnail; a fade-in made it a blank square); the outro fades in over 0.4 s.
+`card.fade_in` / `card.fade_out` (seconds, 0 = none) change both cards; a card's own keys win.
+A **theme** may carry `intro:` / `outro:` too (a brand's standard closing card): an edit gets them
+unless it sets its own, and `outro: false` / `intro: false` in edit.yaml turns them off.
+
+## Writing an edit from a recording (for Claude, and anyone else)
+
+1. Read `transcript.jsonl` (what was said, with word times) and the draft's window list / `session.jsonl`
+   (`window_focus`, `button`, `window_open` records) to see what was on screen when.
+2. Start a scene where the story changes: a new topic in the speech, a new window, a burst of clicks.
+   Prefer `window ... follow: true` for "look at this app", `cursor` for "click here", `camera` for
+   intros, outros and talking without the screen, `split` when talking *about* something on screen.
+3. Use `cuts: {pauses: 1.2, fillers: true}` unless the pauses matter; add `ranges` for false starts.
+4. Run `pugrec check` until it has no warnings you care about, then `pugrec preview` and look.
+5. Give the vertical output its own shots where a wide view doesn't work (`vertical: {shot: ...}`):
+   tall outputs want tight shots - a region, a cursor zoom, the camera.

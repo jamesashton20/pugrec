@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Run pugrec from this checkout. Recording uses the system Python (GObject,
+# evdev, nothing to install); render needs numpy + OpenCV from ./.venv.
+set -euo pipefail
+here="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+py=/usr/bin/python3
+if [[ "${1:-}" =~ ^(render|faces|audio|check|build|preview|proxy|draft|themes)$ ]]; then
+    py="$here/.venv/bin/python"
+    [[ -x "$py" ]] || { echo "pugrec: run 'pugrec setup' first (makes .venv)" >&2; exit 1; }
+fi
+cd "$here"
+exec "$py" -m pugrec "$@"

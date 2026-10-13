@@ -1,0 +1,475 @@
+# Operating pugrec - a guide for agents
+
+pugrec records product demos on James's PugPal desktop (Fedora + Hyprland, a 5120x2160
+monitor) and turns them into edited videos. This guide is for software (an AI agent, a script)
+that operates it on James's behalf. It says what to run, in what order, what every step
+produces, how to check the result, and which steps need a human.
+
+- Repo: `~/git/pugscreenrecord`. Run everything through the launcher: `bin/pugrec <command>`
+  (it picks the right Python; the post-processing commands need `.venv`, already set up).
+- This guide is self-contained: recording (sections 3-4), editing (5-7, and the complete
+  `edit.yaml` reference in the appendix), building and checking (8-9). In the repo, `EDIT.md`,
+  `FORMAT.md` (every data record) and `README.md` have more background.
+
+## 1. Rules
+
+1. **Recording needs James.** He has to be at the computer: the key capture asks for his
+   password, and he does the demo. Don't start a recording on your own initiative.
+2. **No system changes.** No `sudo`, no package installs, no edits outside the repo and the
+   session folders, no killing processes you didn't start. If something seems to need one, ask.
+3. **Don't open browser tabs or pop things up on his screen unasked.** Use `preview --no-open`
+   when you only need the server, and tell James the URL.
+4. **Never delete recordings** (`~/Videos/PugRec/*`). Derived files (listed below) can be
+   regenerated; `screen.mkv`, `camera.mkv` and `session.jsonl` can't.
+5. **Don't overwrite an `edit.yaml` you didn't write** without reading it first. `pugrec draft`
+   never overwrites one (it writes `edit.draft.yaml` instead).
+6. **Verify, then report.** Every step below has a check. Report numbers you measured, not
+   expectations.
+
+## 2. A session folder
+
+Each recording is a folder `~/Videos/PugRec/YYYY-MM-DD_HH-MM-SS/` (the newest one is the
+latest recording: `ls -t ~/Videos/PugRec | head -1`).
+
+| File | Made by | What |
+| --- | --- | --- |
+| `screen.mkv` | `record` | 5120x2160 AV1 screen video, plus the mic as lossless FLAC (raw, unprocessed) |
+| `camera.mkv` | `record` | webcam, 1080p AV1 |
+| `session.jsonl` | `record` | the timeline: cursor, clicks, keys, windows, focus, workspaces, markers (FORMAT.md) |
+| `mic-clean.flac` | `audio` | the mic cleaned up; the build uses it automatically |
+| `transcript.jsonl` | `transcript` | words with timestamps |
+| `faces.jsonl` | `faces` (build/preview make it on demand) | webcam face track |
+| `edit.yaml` | you, James, or `draft` | the scene script: what the final video shows (EDIT.md) |
+| `edit.draft.yaml` | `draft` | a draft, when `edit.yaml` already exists |
+| `proxy/` | `preview` / `proxy` | browser copies of the videos |
+| `build-<output>.mp4` | `build` | the finished videos |
+
+All times in these files are on one clock: **seconds (or ns) since the start of the screen
+video**. `edit.yaml` uses the same seconds ("source seconds").
+
+## 3. Recording (with James)
+
+```bash
+bin/pugrec record                    # in a terminal James can see
+```
+What happens, in order (James usually starts it with **Super+Alt+R** or the Stream Deck Rec key,
+both `pugrec toggle`; a second press stops it):
+1. The **password prompt** (key capture; James types it). Nothing else starts before it.
+2. The **overlay**: the screen dims, a spinner says "Starting camera…" while the screen and camera
+   recorders start (Cancel / Esc works).
+3. **3-2-1** in the same circle (Space or clicking the circle pauses; Esc/Cancel discards).
+4. Recording (`● recording` in the terminal / `$XDG_RUNTIME_DIR/pugrec.log`). Stop: the same key,
+   **Ctrl+C**, or `bin/pugrec stop`.
+Stopping or cancelling **before the countdown ends discards** the session (nothing is kept). After
+it, everything is kept; edits start at the `start` marker (the end of the countdown). Loud
+notifications warn if the mic is muted, the camera is busy (naming the program holding it), or the
+screen video stalled (cursor kept moving after the last video frame).
+
+Useful flags: `--no-input` (no keys/clicks and no password prompt), `--countdown N`
+(`0` = none), `--no-camera`, `--no-mic`, `--mic SOURCE`, `--dir DIR`.
+For a test recording without James (e.g. checking the pipeline): `--no-input --countdown 0`
+into a temp `--dir`, and stop it with SIGINT (Ctrl+C) or `pugrec stop`.
+
+If the mic is muted, a critical notification says so and the audio is silence. pugrec never
+unmutes it (that's James's privacy switch, the Stream Deck "Mic" key / `hotmic`).
+
+**Check a recording:**
+```bash
+bin/pugrec info SESSION
+```
+Look for: a `duration` (missing = it crashed or is still recording), `stream screen` and
+`stream camera`, events including `marker 1`, `button`/`key` counts > 0 (keys and clicks were
+captured), and in `session.jsonl` a `mic_mute` line with `"muted": false`. Mic level:
+`ffmpeg -i SESSION/screen.mkv -map 0:a -af volumedetect -f null - 2>&1 | grep max_volume`
+(around -10 dB with speech; -91 dB = silence, the mic was muted).
+
+## 4. Post-processing, in this order
+
+```bash
+bin/pugrec audio SESSION        # mic-clean.flac: noise, keyboard taps, breaths out; -16 LUFS. ~5 s per 20 s
+bin/pugrec transcript SESSION   # transcript.jsonl, on the GPU. ~10 s per 2 min. --cuts prints suggested cuts
+                                #   --prompt "Acme, FieldPal" / --theme NAME: names to spell right
+bin/pugrec draft SESSION        # edit.yaml (or edit.draft.yaml): a first edit from the timeline
+```
+Run `audio` before `transcript` (the transcript is made from the cleaned audio). `faces` runs
+by itself when a build or preview needs it.
+
+## 5. Reading what happened
+
+**What was said** - `transcript.jsonl`: a `meta` line, then one line per phrase:
+```json
+{"type": "segment", "t": 26440000000, "end": 29980000000, "text": "So here is the new settings page...",
+ "words": [{"t": 26440000000, "end": 26640000000, "w": "So", "p": 0.91}, ...]}
+```
+`t`/`end` are nanoseconds; divide by 1e9 for source seconds. `p` is the confidence. Names are
+often misheard (a product called **Acme** can come out as "Akme"). Prevent it at the source:
+`pugrec transcript SESSION --prompt "Acme, FieldPal"` (or `--theme <name>` for the theme's
+`vocabulary`; `vocabulary = [...]` in `~/.config/pugrec/config.toml` is always used) - re-run the
+transcript if names came out wrong. Whatever is still wrong: `style.captions.fix` (multi-word keys
+allowed, e.g. `"Field Pal": FieldPal`), rather than editing the transcript.
+
+**What happened on screen** - `session.jsonl`, one JSON object per line (FORMAT.md has all of
+them). The useful ones for editing:
+
+| `type` | Tells you |
+| --- | --- |
+| `marker` (`name: start`) | where the demo starts (after the countdown) |
+| `window_focus` (`address`) | which window had focus from this moment |
+| `window_open` / `window_update` | a window's `class`, `title`, `at` (x, y), `size`, `workspace` |
+| `button` (`value: 1`) | a click (`code`: `BTN_LEFT`, ...) |
+| `key` | key presses (`code` or `redacted: true`) |
+| `monitor` (`workspace`) / `hypr` (`event: workspacev2`) | workspace switches |
+| `notice` | something went wrong (e.g. "keys unavailable") |
+
+The draft's header lists every window as `address  class  title`; use those addresses in
+`edit.yaml`. A small reader:
+```python
+import json
+recs = sorted((json.loads(l) for l in open(f"{S}/session.jsonl") if l.strip()), key=lambda r: r["t"])
+clicks = [r["t"] / 1e9 for r in recs if r["type"] == "button" and r.get("value") == 1]
+switches = [(r["t"] / 1e9, r["workspace"]) for r in recs if r["type"] == "monitor" and "workspace" in r]
+```
+(Skip lines that don't parse - a crash can truncate the last one.)
+
+## 6. Writing `edit.yaml`
+
+Start from the draft, or from this skeleton. The full option list is in EDIT.md.
+
+```yaml
+version: 1
+outputs:
+  - {name: main, size: 1920x1080}
+  - {name: vertical, size: 1080x1920}
+timeline:                                  # what's kept, in order (source seconds). Or use `cuts:`, not both
+  - {source: main, from: 9.6, to: 13.6}
+  - {source: main, from: 26.2, to: 110.9}
+style:
+  spotlight: {window: {address: "0x5616f5aa83e0"}}   # the demo window sharp, the rest blurred
+  captions: {fix: {Akme: Acme}}
+  bubble: {corner: bottom-right}
+scenes:                                    # each lasts until the next `at` (source seconds)
+  - {at: 9.6, label: Intro, shot: camera}
+  - at: 26.2
+    label: The app
+    shot: {window: {address: "0x5616f5aa83e0"}}
+    transition: {fade: 0.5}
+  - at: 30.3
+    label: Logging in
+    shot: {cursor: {zoom: 1.8}}
+    transition: {move: 0.6}
+    vertical: {shot: {cursor: {zoom: 1.3}}}   # a different shot on the 9:16 output only
+```
+
+Rules that matter:
+- **Times are source seconds**, never output seconds. Scenes must be in increasing `at`.
+- **Trimming:** `timeline` segments (keep these ranges) or `cuts` (remove these ranges, plus
+  optional `pauses: 1.2` / `fillers: true` from the transcript). Not both.
+- **Shots:** `camera`, `screen`, `auto`, `{window: SEL}` (+ `follow`, `region: [x, y, w, h]`
+  as fractions of the window), `{cursor: {zoom}}`, `{rect: [...]}`, `{split: [A, B], ratio}`.
+  Window selectors: `{address: "0x..."}` (exact - prefer it), `{class: regex}`, `{title: regex}`,
+  `focused`.
+- **Transitions:** `cut`, `{move: s}` (the camera glides; needs one view on both sides, not a
+  split, not screen <-> camera), `{fade: s}`.
+- **The bubble** (webcam circle) settings stick until changed; it hides itself on camera shots.
+
+**Recipes**
+- *False start:* read the transcript, find where the good take begins ("let's restart",
+  repeated sentences, a long pause after a mistake) and start a `timeline` segment just before
+  that phrase's first word (`t / 1e9 - 0.2`). Keep a good opening line before the mistake as its
+  own short segment if there is one.
+- *Recorded "around" the demo* (start on one workspace, demo on another, come back): find the
+  two `monitor` workspace switches in `session.jsonl` and keep only the stretch between them
+  (+/- 0.1 s).
+- *Scenes:* a scene where the story changes - a new topic in the speech, a new window, a burst of
+  clicks. `camera` for the intro/outro, `window` when talking about an app, `cursor` around
+  clicks (start ~0.5 s before the first click), `split` (window + camera) while waiting for
+  something on screen and talking about it.
+- *Vertical output:* give it tighter shots via `vertical:` overrides (cursor zoom 1.2-1.4).
+- *For a customer / brand:* `style: {theme: <name>}` (`pugrec themes` lists them; an unknown name
+  is an error listing the installed ones), plus `intro: {title, subtitle}` / `outro:` title cards
+  in that theme's colours. Override single keys in edit.yaml's `style` if needed (appendix: Themes).
+
+## 7. Validate
+
+```bash
+bin/pugrec check SESSION        # exit 1 + "error: <where>: <what> (did you mean ...?)" if invalid
+```
+On success it prints each output's length and every scene with its source and output time,
+plus warnings. Fix errors; read warnings (e.g. a `move` that had to become a fade, a window
+selector that matched nothing). A scene shown as "not shown (cut)" lies entirely in a removed range.
+
+## 8. Preview (for James) and build
+
+```bash
+bin/pugrec preview SESSION                 # browser page; updates whenever edit.yaml is saved
+bin/pugrec preview SESSION --no-open       # just the server; prints the URL (next free port from 8765)
+```
+The page plays the edit as it will be built: output tabs (main/vertical), scene list, scrub bar.
+Links like `http://127.0.0.1:8765/#t=12.5&o=vertical` open at a time and output.
+
+```bash
+bin/pugrec build SESSION                   # build-main.mp4 + build-vertical.mp4 next to edit.yaml
+bin/pugrec build SESSION --hq              # final export: CRF 14, preset slow (bigger, slower)
+bin/pugrec build SESSION --output main --from 4 --to 12    # a quick partial build (output seconds)
+bin/pugrec build SESSION --whatsapp        # also build-<output>-whatsapp.mp4 per output
+bin/pugrec whatsapp SESSION/build-vertical.mp4   # a WhatsApp copy of any MP4/MKV (~30 s), raw recordings too
+```
+**WhatsApp** plays a video inline only when it follows Meta's media rules: MP4, H.264 + AAC,
+one audio stream, **no High profile with B-frames** (Android clients can't play it), moov at
+the front, and **16 MB at most** (bigger files go as a document, with no player). Normal builds
+are High with B-frames and often bigger than 16 MB, so they arrive as files. The WhatsApp copy
+is H.264 Main 4.0 without B-frames, 30 fps, limited range tagged BT.709, AAC 96k, faststart,
+with a two-pass bitrate aimed at 15 MB (stepping down to 720p/540p for longer videos; over
+~7 min it refuses - cut it shorter). For a phone audience send the vertical one.
+In WhatsApp attach it with **+ → Photos & videos**: "Document" always sends a file (no player).
+Speed: ~0.4x real time with 4 jobs (a 90 s edit takes ~3.5 min per output). Output: H.264
+MP4 + AAC, plays everywhere. For sharper text add an output like `{name: hd, size: 2560x1440}`
+and build it with `--output hd`.
+
+## 9. Verify a build
+
+```bash
+ffprobe -v error -count_frames -show_entries stream=codec_type,width,height,nb_read_frames:format=duration \
+  -of compact SESSION/build-main.mp4
+ffmpeg -v error -y -ss 30 -i SESSION/build-main.mp4 -frames:v 1 /tmp/frame-30s.png   # then look at it
+```
+Check: the duration matches `pugrec check`, both video and audio streams exist, and frames at
+a few scene times show what the script says (the right window, the zoom on the click, the
+caption text, the bubble corner, the rest of the screen blurred if the spotlight is on). If you
+can't look at images, at least compare durations and audio levels.
+
+## 10. Troubleshooting
+
+| Symptom | Cause / fix |
+| --- | --- |
+| `info` shows no duration | the recorder crashed or is still running (`pugrec stop`) |
+| Audio is silence (-91 dB) | the mic was muted while recording; nothing to recover, record again |
+| `button`/`key` counts are 0 | James dismissed the password prompt (only the mouse, or nothing, was captured) |
+| No camera stream | camera unplugged / busy; `notice` lines in `session.jsonl` say which |
+| `preview`: address in use | another server on the port; pugrec moves to the next free port and prints it |
+| `transcript`: whisper-cli missing | `scripts/build-whisper.sh` (builds it in a distrobox; James's go-ahead first) |
+| `check`: "no window matches" | the selector matched nothing at that scene's start: use an `address` from the draft header |
+| Captions spell a name wrong | `style.captions.fix: {Wrong: Right}` |
+| A notification popped up over the demo window | the spotlight can't hide things *on top of* the window: cut that moment or use another shot |
+
+## Worked example: a product demo with a false start
+
+James started recording on workspace 1, did the demo on workspace 2, went back to 1 to stop,
+and fumbled the first take. What was done:
+1. `info`: 112.5 s, keys/clicks captured, mic live, `start` marker at 6.5 s.
+2. `session.jsonl`: workspace 2 from 7.2 s to 111.0 s.
+3. `audio`, `transcript`: the transcript showed the false start (a login that failed, then
+   "Let's restart", 13.8-24.9 s) and where the good take began (26.4 s).
+4. `edit.yaml`: segments 9.6-13.6 (the opening line), 26.2-33.0, 35.3-110.9 (a 2.3 s loading
+   wait removed); scenes from the transcript and the click times (camera intro, the browser
+   window, cursor zooms around clicks, a split while the app works); spotlight on the browser
+   window; a caption fix for the product name.
+5. `check` (no warnings), `preview` for James, `build`: two 86.4 s videos.
+
+## Appendix: the complete `edit.yaml` reference
+
+So this guide is enough on its own. (A copy of EDIT.md's reference sections - EDIT.md is
+the source; when one changes, update the other.)
+
+### A complete example
+
+```yaml
+version: 1
+outputs:
+  - {name: main, size: 1920x1080}
+  - {name: vertical, size: 1080x1920}
+cuts:
+  pauses: 1.2                 # cut silences > 1.2 s (from the transcript), keeping 0.3 s each side
+  fillers: true               # cut um / uh / erm
+  ranges: [[41.0, 44.2]]      # and these, by hand
+style:
+  bubble: {corner: bottom-left, size: 0.26}
+  captions: {show: true}
+scenes:
+  - at: 0
+    label: Hello
+    shot: camera                                        # full-screen camera, face-centred
+  - at: 4.2
+    shot: {window: {class: google-chrome}, follow: true}  # a window, following it as it moves
+    transition: {move: 0.8}
+    bubble: {corner: bottom-right}                      # the camera bubble moves (and stays there)
+  - at: 9.0
+    shot: {window: {title: Grafana}, region: [0, 0.1, 0.5, 0.4]}   # part of a window
+  - at: 14.0
+    shot: {cursor: {zoom: 2.2}}                         # follow the mouse
+  - at: 20.0
+    shot: {split: [{window: {title: Grafana}}, camera], ratio: 0.65}
+    transition: {fade: 0.4}
+  - at: 26.0
+    shot: auto                                          # automatic: zoom on clicks, else focused window
+    fit: contain                                        # the whole view, blurred background around it
+    vertical: {shot: {cursor: {zoom: 1.5}}}             # different shot on the vertical output only
+```
+
+### Top level
+
+| Key | Meaning |
+| --- | --- |
+| `version` | `1` |
+| `outputs` | `[{name, size: WxH, fps}]` - default `main` 1920x1080 @ 60. Names are used for per-output overrides (`vertical:` in a scene). Sizes must be even. |
+| `cuts` | a list `[[from, to], ...]`, or `{pauses: s, fillers: bool, ranges: [...]}` (pauses/fillers need `transcript.jsonl`) |
+| `timeline` | instead of cuts: explicit segments `[{source, from, to}]` in order (splicing; reordering) |
+| `sources` | `{main: {session: .}}` (default). Other sources (sessions, videos, images) are planned. |
+| `audio` | `{source: mic-clean | raw | none}` - mic-clean (from `pugrec audio`) if it exists, else raw |
+| `style` | defaults, below |
+| `scenes` | the list of scenes, by `at` |
+| `intro` / `outro` | title cards before/after the video: `"Title"` or `{title, subtitle, duration}` |
+| `overlays` | reserved (picture-in-picture of other sources, later) |
+
+### Scenes
+
+Each scene lasts until the next scene's `at`.
+
+| Key | Meaning |
+| --- | --- |
+| `at` | source seconds where it starts |
+| `shot` | what to show (below) |
+| `fit` | `auto` (default) / `cover` / `contain` (below) |
+| `background` | for `contain`: `blur` (default) or a colour `"#16171a"` |
+| `transition` | into this scene: `cut`, `{move: s}`, `{fade: s}` (default `{move: 0.6}`) |
+| `bubble` | camera bubble: `{corner, size, margin, shape, show}`, `false` to hide, `true` to show. **Sticky**: applies until a later scene changes it |
+| `spotlight` | `false` / `true` / `{window, blur, dim}` for this scene only (default: the style's) |
+| `label` | name in the preview/check (default: described from the shot) |
+| `<output name>` | overrides for one output, e.g. `vertical: {shot: ..., fit: ...}` |
+
+#### Shots
+
+| Shot | What it shows |
+| --- | --- |
+| `screen` | the whole monitor |
+| `camera` / `{camera: {zoom: 1.3}}` | the webcam, head and shoulders, centred on the face (`faces.jsonl`) |
+| `auto` / `{auto: {zoom: 2}}` | automatic: zooms in on clicks/typing/scrolling (slightly before they happen), otherwise frames the focused window |
+| `{window: SEL, follow: true, region: [x, y, w, h], padding: 0.04}` | a window. `follow` (default true) tracks it as it moves/resizes; `follow: false` freezes it where it was when the scene started. `region` = part of the window, fractions of its size. |
+| `{cursor: {zoom: 2, dead_zone: 0.2}}` | follows the mouse; the view only moves when the cursor leaves the middle `1 - 2*dead_zone` |
+| `{rect: [x, y, w, h]}` | a fixed screen area, pixels - or fractions of the screen if all values <= 1 |
+| `{split: [SHOT, SHOT], ratio: 0.5, layout: auto}` | two panes; `auto` = side by side on wide outputs, stacked on tall ones (`row`/`column` to force) |
+
+**Window selectors** (`SEL`): `{class: regex}`, `{title: regex}`, both, `{address: "0x..."}` (exact; the draft
+and `session.jsonl` list them), or `focused` / `{focused: true}` (whatever has focus, switching with it).
+A class/title selector is resolved once, when the scene starts (several matches: visible, then focused,
+then largest). If nothing matches, the scene shows the whole screen and `check` warns.
+
+#### Fit: when the shape doesn't match the output
+
+Every shot has a target rectangle; the output (or split pane) has its own aspect.
+- `cover`: show more around the target until it fills the frame; if the screen runs out, crop.
+- `contain`: show exactly the target, centred, with a **blurred, dimmed copy** of the same view
+  behind it (or a colour: `background: "#16171a"`).
+- `auto` (default): `cover` unless that would cut off more than 15% of the target, then `contain`.
+  On a 5120x2160 screen, a 16:9 output of the whole screen is `contain`; on 9:16, most windows are.
+
+#### Spotlight: one window sharp, the rest of the screen blurred
+
+```yaml
+style:
+  spotlight: {window: {address: "0x5616f5aa83e0"}, blur: 40, dim: 0.35}
+scenes:
+  - at: 66.9
+    spotlight: false          # this scene shows the whole desktop
+```
+Every view of the screen - window shots, cursor zooms, `auto`, `screen`, the screen pane of a
+split - keeps the spotlit window sharp and blurs and dims everything else, following the window
+if it moves. For a single-screen demo that's focus *and* privacy: other apps' text is unreadable.
+`window:` takes the same selectors as shots (`address`, `class`, `title`, `focused` - which follows
+focus). Per scene: `spotlight: false` / `true` / `{...}`, not sticky (the style applies otherwise).
+Zoomed in inside the window, nothing is blurred. Limits: anything outside the window's rectangle
+is blurred too (a menu or popup sticking out of it, the cursor when it leaves it), and anything
+*over* the window stays sharp (e.g. a notification popping up on top of it). `pugrec draft` turns
+it on for the window with the most focus time.
+
+#### Transitions
+
+- `cut` - instant.
+- `{move: s}` - the virtual camera glides from the previous view to the new one (needs a single
+  full-frame view of the same source on both sides; otherwise it becomes a fade and `check` says so).
+- `{fade: s}` - crossfade.
+- `{sparkle: s}` - a crossfade with 4-point star sparkles twinkling across the frame.
+- `{sweep: s}` - the theme's sprite (`style.sparkle.image`) crosses the frame left to right,
+  revealing the next scene behind it, leaving a sparkle trail.
+`sparkle` and `sweep` are **a theme's signature, not a general effect**: they only work when the
+theme (or the edit) has a `sparkle:` section in its style - anywhere else `check` refuses them.
+They're deterministic, so the preview and the build show the same sparkles.
+The bubble animates to its new corner/size with the transition (0.5 s on a cut).
+
+### Style (defaults)
+
+```yaml
+style:
+  theme: null                # a theme name or path (below); its keys are the base for everything here
+  accent: "#ff6b2c"          # click rings, the spoken word in captions, the bar on title cards
+  bubble: {shape: circle, size: 0.26, corner: bottom-left, margin: 0.04, show: true,   # size/margin: of the shorter side
+           border: {color: "#f1e4d9", width: 3}}                                       # width px at 1080p; false = none
+  click_rings: true          # a ring on each click, in the accent colour
+  captions: {show: true, size: 0.045, position: auto, max_words: 6, highlight: true,   # auto = bottom / lower third on 9:16
+             font: IBM Plex Sans, weight: 600, color: "#f1e4d9",                       # any installed font family
+             background: "#16171a", background_opacity: 0.78,                           # the box behind the words
+             fix: {}}                # {Misheard: Right}; keys may be several words ("Field Pal": FieldPal),
+                                     # case-insensitive; edit.yaml's fix MERGES with the theme's
+  logo: null                 # {file: logo.png, corner: top-right, size: 0.12, margin: 0.03, opacity: 0.9}
+  card: {background: "#16171a", color: "#f1e4d9", font: null, duration: 3.0,         # intro/outro cards; font null = captions'
+         image: null, image_size: 0.12,   # image: a brand icon, centred above the title; size = its height / the shorter side
+         fade_in: null, fade_out: 0.4}    # seconds; fade_in null = 0 for the intro (frame 0 = thumbnail), 0.4 for the outro
+  spotlight: null            # {window: SEL, blur: 40, dim: 0.35}
+  sparkle:                   # only for themes that want the sparkle/sweep transitions (opt-in)
+    {colors: null,           # star colours; null = white + accent
+     image: null,            # the sweep's sprite (PNG/JPEG/WebP, relative to the file naming it)
+     image_size: 0.3,        # sprite height / the shorter side
+     pixelated: false,       # true: nearest-neighbour scaling, for pixel art
+     flip: false,            # mirror the sprite (it travels left to right)
+     count: 36}              # stars per burst / trail
+  background: "#16171a"      # behind splits
+  blur: 40                   # px at 1080p, blurred backgrounds
+  radius: 6                  # px at 1080p, rounded panes
+  gap: 0.02                  # split gap
+  padding: 0.04              # around a framed window
+  transition: {move: 0.6}    # default transition
+```
+The bubble hides automatically when the shot itself shows the camera. Captions appear when the
+recording has `transcript.jsonl`; the word being spoken is highlighted. Colours are `"#rrggbb"`.
+`logo.file` is PNG/JPEG/WebP (export SVGs first), relative to the file that names it; `size` is its
+width as a fraction of the output width (the height keeps the image's aspect).
+
+#### Themes: a customer's or brand's look
+
+A theme is a YAML file of `style` keys (plus an optional `description`; `vocabulary:` - a list of
+names for the transcript, used by `pugrec transcript --theme NAME`; and default `intro:`/`outro:`
+cards), validated exactly like `style`. `style: {theme: acme}` loads `~/.config/pugrec/themes/acme.yaml` (or `theme: some/path.yaml`,
+relative to edit.yaml). Order: pugrec's defaults (the PugPal look) <- the theme <- edit.yaml's own
+`style` keys, key by key (`captions: {color: ...}` in edit.yaml changes only the colour). An unknown
+theme is an error listing the installed ones.
+```bash
+pugrec themes                # the installed themes and their descriptions
+pugrec themes --defaults     # the PugPal look as a complete theme file (a starting point)
+```
+**Getting names right.** Best at the source: give whisper the names, and the transcript (and so
+captions, cuts and drafts) spells them right - `pugrec transcript SESSION --prompt "FieldPal, Acme"`,
+`--theme acme` (the theme's `vocabulary`), and/or `vocabulary = ["FieldPal"]` in
+`~/.config/pugrec/config.toml` (always used). All three combine. `captions.fix` is the fallback for
+what still comes out wrong.
+```yaml
+## ~/.config/pugrec/themes/acme.yaml
+description: Acme Corp - blue on navy, logo top-right
+vocabulary: [Acme, AcmeCloud]
+accent: "#2f80ff"
+captions: {font: Inter, weight: 700, color: "#ffffff", background: "#0b1f3a"}
+bubble: {border: {color: "#2f80ff", width: 4}}
+card: {background: "#0b1f3a", color: "#ffffff"}
+logo: {file: acme-logo.png, corner: top-right, size: 0.1}   # next to the theme file
+```
+
+#### Title cards: `intro` / `outro`
+
+Top-level keys: `intro: "Title"` or `intro: {title, subtitle, duration, fade_in, fade_out}` (and
+the same for `outro`). A card is a full-frame title in the theme's `card` colours with an accent bar - and
+`card.image` (a brand icon) big above the title - before/after the timeline, fading in and out,
+with silence underneath (the audio stays in sync). The logo watermark shows on cards too.
+The intro is **fully drawn on frame 0** by default (WhatsApp, LinkedIn and YouTube use the first
+frame as the thumbnail; a fade-in made it a blank square); the outro fades in over 0.4 s.
+`card.fade_in` / `card.fade_out` (seconds, 0 = none) change both cards; a card's own keys win.
+A **theme** may carry `intro:` / `outro:` too (a brand's standard closing card): an edit gets them
+unless it sets its own, and `outro: false` / `intro: false` in edit.yaml turns them off.

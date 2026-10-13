@@ -1,0 +1,544 @@
+"""Editor: script validation and the resolver (no video).  .venv/bin/python -m unittest discover tests"""
+
+import json
+import os
+import sys
+import tempfile
+import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import fake_session  # noqa: E402
+from pugrec.edit import resolve as R  # noqa: E402
+from pugrec.edit import script as S  # noqa: E402
+
+SEC = 1_000_000_000
+
+
+def make_session(d, camera=True):
+    """fake_session's 10 s timeline + the right window moving at 3 s + a camera stream."""
+    recs = list(fake_session.records())
+    # At 3 s the right window becomes small and moves to the lower right (floating, dragged).
+    recs.insert(-1, {"t": 3 * SEC, "type": "window_update", "address": "0xb", "at": [3400, 1100], "size": [1200, 900]})
+    if camera:
+        recs.insert(2, {"t": int(0.5 * SEC), "type": "stream_start", "stream": "camera", "file": "camera.mkv",
+                        "pixels": [1920, 1080], "fps": 30, "codec": "av1", "first_frame_t": int(0.5 * SEC)})
+        open(os.path.join(d, "camera.mkv"), "w").close()
+    with open(os.path.join(d, "session.jsonl"), "w") as f:
+        for r in recs:
+            f.write(json.dumps(r) + "\n")
+    return d
+
+
+def plan(data, d, output=None, fps=10):
+    sc = S.parse(data, d)
+    return R.resolve(sc, output, fps=fps)
+
+
+def frame_at(p, t):
+    return min(p["frames"], key=lambda f: abs(f["t"] - t))
+
+
+def videos(f, src=None):
+    return [l for l in f["layers"] if l["type"] == "video" and (src is None or l["src"].endswith(src))]
+
+
+class ScriptErrors(unittest.TestCase):
+    def check(self, data, needle):
+        with self.assertRaises(S.ScriptError) as cm:
+            S.parse(data)
+        self.assertIn(needle, str(cm.exception))
+
+    def test_unknown_key_suggests(self):
+        self.check({"scenes": [{"at": 0, "shot": {"window": {"clas": "kitty"}}}]},
+                   "scenes[0].shot.window: unknown key 'clas' (did you mean 'class'?)")
+
+    def test_unknown_shot(self):
+        self.check({"scenes": [{"at": 0, "shot": "camra"}]}, "unknown shot 'camra' (did you mean 'camera'?)")
+
+    def test_split_needs_two(self):
+        self.check({"scenes": [{"at": 0, "shot": {"split": ["screen"]}}]}, "exactly two shots")
+
+    def test_region_bounds(self):
+        self.check({"scenes": [{"at": 0, "shot": {"window": {"class": "x"}, "region": [0.5, 0, 0.6, 1]}}]},
+                   "x + w and y + h must be <= 1")
+
+    def test_scene_order(self):
+        self.check({"scenes": [{"at": 5, "shot": "screen"}, {"at": 2, "shot": "camera"}]}, "must be after")
+
+    def test_cuts_and_timeline_exclusive(self):
+        self.check({"cuts": [[1, 2]], "timeline": [{"source": "main"}], "scenes": [{"at": 0, "shot": "screen"}]},
+                   "either timeline")
+
+    def test_overlays_not_yet(self):
+        self.check({"overlays": [{"source": "main"}], "scenes": [{"at": 0, "shot": "screen"}]}, "not supported yet")
+
+    def test_output_override_key_checked(self):
+        self.check({"outputs": [{"name": "vertical", "size": "1080x1920"}],
+                    "scenes": [{"at": 0, "shot": "screen", "vertical": {"shoot": "camera"}}]},
+                   "scenes[0].vertical: unknown key 'shoot' (did you mean 'shot'?)")
+
+
+class Resolver(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = make_session(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_screen_on_16_9_is_contain_with_blur(self):
+        # 5120x2160 (2.37:1) on 16:9: a cover crop loses 25% -> contain + blurred background (item 5).
+        p = plan({"scenes": [{"at": 0, "shot": "screen", "bubble": False}]}, self.d)
+        f = frame_at(p, 1.0)
+        bg, fg = videos(f)[:2]
+        self.assertGreater(bg.get("blur", 0), 0)
+        self.assertEqual(fg["rect"], [0.0, 0.0, 5120.0, 2160.0])
+        self.assertAlmostEqual(fg["dst"][2] / fg["dst"][3], 5120 / 2160, places=2)
+        self.assertEqual(fg["dst"][2], 1920.0)
+
+    def test_window_follow_tracks_the_move(self):
+        p = plan({"scenes": [{"at": 0, "shot": {"window": {"title": "right"}, "follow": True}, "fit": "cover"}]},
+                 self.d)
+        before = videos(frame_at(p, 2.5))[0]["rect"]
+        after = videos(frame_at(p, 6.0))[0]["rect"]
+        self.assertLess(before[1], 100)
+        self.assertGreater(after[1], before[1] + 500)   # followed the window down...
+        self.assertLess(after[2], before[2] * 0.7)      # ...and zoomed in on the smaller window
+        cx = after[0] + after[2] / 2
+        self.assertAlmostEqual(cx, 3400 + 600, delta=60)  # centred on it
+
+    def test_region_inside_window(self):
+        p = plan({"scenes": [{"at": 0, "shot": {"window": {"title": "left"}, "region": [0, 0, 0.5, 0.25]},
+                              "fit": "contain", "bubble": False}]}, self.d)
+        fg = videos(frame_at(p, 1.0))[-1]
+        x, y, w, h = fg["rect"]
+        self.assertLess(w, 2540 * 0.6)                 # about half the window wide (+ padding)
+        self.assertGreaterEqual(x, 0)
+
+    def test_vertical_window_gets_blur(self):
+        p = plan({"outputs": [{"name": "vertical", "size": "1080x1920"}],
+                  "scenes": [{"at": 0, "shot": {"window": {"title": "right"}}, "bubble": False}]}, self.d)
+        f = frame_at(p, 1.0)
+        vs = videos(f)
+        self.assertEqual(len(vs), 2)
+        self.assertGreater(vs[0]["blur"], 0)
+        self.assertEqual(vs[1]["dst"][2], 1080.0)       # the window fills the width
+
+    def test_cuts_remove_time(self):
+        p = plan({"cuts": [[2, 4]], "scenes": [{"at": 0, "shot": "screen"}]}, self.d)
+        self.assertAlmostEqual(p["duration"], 8.0)
+        f = frame_at(p, 2.5)                            # output 2.5 s = source 4.5 s
+        self.assertAlmostEqual(f["st"], 4.5, places=3)
+
+    def test_two_segments_same_source_splice_path(self):
+        p = plan({"timeline": [{"source": "main", "from": 6, "to": 8}, {"source": "main", "from": 1, "to": 2}],
+                  "scenes": [{"at": 0, "shot": "screen"}]}, self.d)
+        self.assertAlmostEqual(p["duration"], 3.0)
+        self.assertAlmostEqual(frame_at(p, 0.0)["st"], 6.0)
+        self.assertAlmostEqual(frame_at(p, 2.5)["st"], 1.5)
+        for f in p["frames"]:
+            for l in f["layers"]:
+                if l["type"] == "video":
+                    self.assertIn("/", l["src"])        # every layer names its source stream
+                    self.assertAlmostEqual(l["t"], f["st"], places=3)
+
+    def test_split_row_and_column(self):
+        data = {"outputs": [{"name": "main", "size": "1920x1080"}, {"name": "vertical", "size": "1080x1920"}],
+                "scenes": [{"at": 0, "shot": {"split": [{"window": {"title": "left"}}, "camera"]}}]}
+        sc = S.parse(data, self.d)
+        main = R.resolve(sc, "main", fps=5)
+        vert = R.resolve(sc, "vertical", fps=5)
+        m = [l for l in videos(frame_at(main, 1)) if not l.get("blur")][:2]
+        v = [l for l in videos(frame_at(vert, 1)) if not l.get("blur")][:2]
+        self.assertLess(m[0]["dst"][0], m[1]["dst"][0])        # side by side
+        self.assertLess(v[0]["dst"][1], v[1]["dst"][1])        # stacked
+        self.assertEqual(frame_at(main, 1)["layers"][0]["type"], "fill")
+
+    def test_move_transition_interpolates(self):
+        p = plan({"scenes": [{"at": 0, "shot": "screen", "fit": "cover", "bubble": False},
+                             {"at": 5, "shot": {"rect": [0, 0, 0.25, 0.25]}, "fit": "cover",
+                              "transition": {"move": 1.0}, "bubble": False}]}, self.d)
+        w0 = videos(frame_at(p, 4.9))[0]["rect"][2]
+        wm = videos(frame_at(p, 5.5))[0]["rect"][2]
+        w1 = videos(frame_at(p, 6.5))[0]["rect"][2]
+        self.assertGreater(w0, wm)
+        self.assertGreater(wm, w1)
+
+    def test_move_from_contain_into_a_zoom(self):
+        # A window shown whole (contain + blur) gliding into a cursor zoom (cover): the sharp view
+        # grows from letterboxed to full frame while the blurred background fades out.
+        p = plan({"scenes": [{"at": 0, "shot": {"window": {"title": "left"}}, "fit": "contain", "bubble": False},
+                             {"at": 5, "shot": {"cursor": {"zoom": 2}}, "transition": {"move": 1.0},
+                              "bubble": False}]}, self.d)
+        self.assertFalse([w for w in p["warnings"] if "move" in w])
+        sharp = lambda f: [l for l in videos(f) if not l.get("blur")][-1]
+        before, mid, after = (sharp(frame_at(p, t))["dst"][2] for t in (4.9, 5.5, 6.5))
+        self.assertLess(before, mid)
+        self.assertLess(mid, after)
+        self.assertEqual(after, 1920.0)
+        blurs = [l for l in videos(frame_at(p, 5.5)) if l.get("blur")]
+        self.assertTrue(blurs and 0 < blurs[0]["opacity"] < 1)
+
+    def test_spotlight_blurs_all_but_the_window(self):
+        p = plan({"style": {"spotlight": {"window": {"title": "right"}}},
+                  "scenes": [{"at": 0, "shot": "screen", "fit": "cover", "bubble": False}]}, self.d)
+        vs = videos(frame_at(p, 1.0))
+        self.assertEqual(len(vs), 2)
+        self.assertGreater(vs[0]["blur"], 0)                       # the whole view, blurred + dimmed
+        self.assertGreater(vs[0]["dim"], 0)
+        sharp = vs[1]
+        self.assertFalse(sharp.get("blur"))
+        x, y, w, h = sharp["rect"]
+        self.assertAlmostEqual(x, 2570 - 3, delta=1)               # the right window (+ border)
+        self.assertLess(w, 2600)
+        # The sharp part lands where the window is in the output.
+        bx, by, bw, bh = vs[0]["rect"]
+        self.assertAlmostEqual(sharp["dst"][0], (x - bx) / bw * 1920, delta=1)
+
+    def test_spotlight_off_per_scene_and_inside_window(self):
+        p = plan({"style": {"spotlight": {"window": {"title": "right"}}},
+                  "scenes": [{"at": 0, "shot": "screen", "fit": "cover", "spotlight": False, "bubble": False},
+                             {"at": 5, "shot": {"window": {"title": "right"}, "region": [0.2, 0.2, 0.3, 0.3]},
+                              "fit": "cover", "transition": "cut", "bubble": False}]}, self.d)
+        self.assertFalse([l for l in videos(frame_at(p, 1.0)) if l.get("blur") and l.get("dim")])  # off
+        zoomed = videos(frame_at(p, 7.0))
+        self.assertEqual(len(zoomed), 1)                           # zoomed inside the window: no blur
+        self.assertFalse(zoomed[0].get("blur"))
+
+    def test_spotlight_leaves_camera_alone(self):
+        p = plan({"style": {"spotlight": True}, "scenes": [{"at": 0, "shot": "camera"}]}, self.d)
+        self.assertFalse([l for l in videos(frame_at(p, 2.0)) if l.get("blur")])
+
+    def test_fade_transition_blends(self):
+        p = plan({"scenes": [{"at": 0, "shot": "screen", "bubble": False},
+                             {"at": 5, "shot": "camera", "transition": {"fade": 1.0}}]}, self.d)
+        f = frame_at(p, 5.5)
+        cam = videos(f, "/camera")
+        self.assertTrue(videos(f, "/screen"))
+        self.assertTrue(0 < cam[0]["opacity"] < 1)
+
+    def test_bubble_moves_between_corners(self):
+        p = plan({"scenes": [{"at": 0, "shot": "screen"},
+                             {"at": 5, "shot": "screen", "bubble": {"corner": "bottom-right"},
+                              "transition": "cut"}]}, self.d)
+        x0 = videos(frame_at(p, 4.9), "/camera")[0]["dst"][0]
+        xm = videos(frame_at(p, 5.2), "/camera")[0]["dst"][0]
+        x1 = videos(frame_at(p, 6.0), "/camera")[0]["dst"][0]
+        self.assertLess(x0, xm)
+        self.assertLess(xm, x1)
+        self.assertGreater(x1, 1400)
+
+    def test_bubble_settings_stick(self):
+        p = plan({"scenes": [{"at": 0, "shot": "screen", "bubble": {"corner": "top-right"}},
+                             {"at": 5, "shot": {"rect": [0, 0, 0.5, 0.5]}}]}, self.d)
+        b = videos(frame_at(p, 7), "/camera")[0]
+        self.assertGreater(b["dst"][0], 1400)            # still on the right...
+        self.assertLess(b["dst"][1], 200)                # ...and at the top
+
+    def test_bubble_hidden_on_camera_shot(self):
+        p = plan({"scenes": [{"at": 0, "shot": "camera"}]}, self.d)
+        f = frame_at(p, 2)
+        self.assertEqual(len(videos(f, "/camera")), 1)          # the full camera only, no bubble
+
+    def test_click_ring_mapped_into_view(self):
+        p = plan({"scenes": [{"at": 0, "shot": {"window": {"title": "right"}}, "fit": "cover"}]}, self.d)
+        rings = [l for l in frame_at(p, 2.1)["layers"] if l["type"] == "ring"]
+        self.assertEqual(len(rings), 1)
+        self.assertTrue(0 <= rings[0]["x"] <= 1920 and 0 <= rings[0]["y"] <= 1080)
+
+    def test_warns_when_the_edit_runs_past_the_video(self):
+        from unittest import mock
+        # A stalled encoder: the screen video stops at 6 s of a 10 s recording.
+        with mock.patch.object(R.Session, "video_end", lambda self, kind: 6.0 if kind == "screen" else None):
+            p = plan({"scenes": [{"at": 0, "shot": "screen"}]}, self.d)
+            self.assertTrue(any("screen video ends at 6.0s but the edit runs to 10.0s" in w for w in p["warnings"]))
+            p = plan({"timeline": [{"source": "main", "from": 0, "to": 5.8}], "scenes": [{"at": 0, "shot": "screen"}]}, self.d)
+            self.assertFalse([w for w in p["warnings"] if "video ends" in w])   # trimmed before the stall: fine
+
+    def test_missing_window_warns_and_falls_back(self):
+        p = plan({"scenes": [{"at": 0, "shot": {"window": {"class": "nope"}}}]}, self.d)
+        self.assertTrue(any("no window matches" in w for w in p["warnings"]))
+        self.assertTrue(videos(frame_at(p, 1)))
+
+
+def add_transcript(d):
+    """Words: 'So this is the demo.' 1.0-2.5 s, a 3 s pause, 'Now um the editor' 5.5-7 s."""
+    words = [(1.0, 1.2, "So"), (1.25, 1.5, "this"), (1.55, 1.7, "is"), (1.75, 1.9, "the"), (1.95, 2.5, "demo."),
+             (5.5, 5.8, "Now"), (5.85, 6.1, "um"), (6.15, 6.4, "the"), (6.45, 7.0, "editor")]
+    seg = {"type": "segment", "t": int(1.0 * SEC), "end": int(7 * SEC), "text": "...",
+           "words": [{"t": int(a * SEC), "end": int(b * SEC), "w": w, "p": 0.9} for a, b, w in words]}
+    with open(os.path.join(d, "transcript.jsonl"), "w") as f:
+        f.write(json.dumps({"type": "meta", "t": 0}) + "\n" + json.dumps(seg) + "\n")
+
+
+class Captions(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = make_session(self.tmp.name)
+        add_transcript(self.d)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_lines_break_at_sentence_and_pause(self):
+        sess = R.Session(self.d)
+        lines = R.caption_lines(sess.transcript, max_words=6)
+        self.assertEqual([" ".join(w[2] for w in l[2]) for l in lines], ["So this is the demo.", "Now um the editor"])
+        self.assertLess(lines[0][1], lines[1][0])            # no overlap
+
+    def test_text_layer_highlights_the_spoken_word(self):
+        p = plan({"scenes": [{"at": 0, "shot": "screen"}]}, self.d)
+        texts = [l for l in frame_at(p, 1.6)["layers"] if l["type"] == "text"]
+        self.assertEqual(len(texts), 1)
+        self.assertEqual([w["w"] for w in texts[0]["words"] if w["hi"]], ["is"])
+        self.assertFalse([l for l in frame_at(p, 4.0)["layers"] if l["type"] == "text"])  # the pause: none
+
+    def test_caption_fix_keeps_punctuation(self):
+        self.assertEqual(R.fix_word("Akme,", {"Akme": "Acme"}), "Acme,")
+        self.assertEqual(R.fix_word("Akmes", {"Akme": "Acme"}), "Akmes")   # whole words only
+        p = plan({"style": {"captions": {"fix": {"demo": "Acme"}}}, "scenes": [{"at": 0, "shot": "screen"}]}, self.d)
+        texts = [l for l in frame_at(p, 2.0)["layers"] if l["type"] == "text"]
+        self.assertIn("Acme.", [w["w"] for w in texts[0]["words"]])   # "demo." -> "Acme."
+
+    def test_captions_off(self):
+        p = plan({"style": {"captions": False}, "scenes": [{"at": 0, "shot": "screen"}]}, self.d)
+        self.assertFalse([l for f in p["frames"] for l in f["layers"] if l["type"] == "text"])
+
+    def test_cuts_from_transcript(self):
+        p = plan({"cuts": {"pauses": 1.2, "fillers": True}, "scenes": [{"at": 0, "shot": "screen"}]}, self.d)
+        # The 3 s pause (2.5-5.5) minus 0.3 kept each side = 2.4 s, and "um" (0.25 + 0.1 margin).
+        self.assertAlmostEqual(p["duration"], 10.0 - 2.4 - 0.35, places=2)
+        self.assertEqual(len(p["segments"]), 3)
+
+
+class Themes(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.makedirs(os.path.join(self.tmp.name, "s"))
+        self.d = make_session(os.path.join(self.tmp.name, "s"))
+        add_transcript(self.d)
+        self.cfg = os.path.join(self.tmp.name, "cfg")
+        os.makedirs(os.path.join(self.cfg, "pugrec", "themes"))
+        with open(os.path.join(self.cfg, "pugrec", "themes", "acme.yaml"), "w") as f:
+            f.write("description: Acme Corp\naccent: '#0055ff'\ncaptions: {color: '#ffffff', font: DejaVu Sans}\n"
+                    "card: {background: '#002244'}\nbubble: {corner: top-right}\n")
+        from unittest import mock
+        self.env = mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": self.cfg})
+        self.env.start()
+
+    def tearDown(self):
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def test_theme_loads_and_edit_overrides(self):
+        sc = S.parse({"style": {"theme": "acme", "captions": {"color": "#eeeeee"}}, "scenes": [{"at": 0, "shot": "screen"}]}, self.d)
+        st = sc["style"]
+        self.assertEqual(st["accent"], "#0055ff")                    # from the theme
+        self.assertEqual(st["captions"]["font"], "DejaVu Sans")      # from the theme
+        self.assertEqual(st["captions"]["color"], "#eeeeee")         # edit.yaml wins
+        self.assertEqual(st["captions"]["size"], 0.045)              # untouched default
+        self.assertEqual(st["bubble"]["corner"], "top-right")
+
+    def test_fix_maps_merge_and_multiword(self):
+        with open(os.path.join(self.cfg, "pugrec", "themes", "fp.yaml"), "w") as f:
+            f.write("vocabulary: [FieldPal]\ncaptions: {fix: {'Field Pal': FieldPal}}\n")
+        sc = S.parse({"style": {"theme": "fp", "captions": {"fix": {"Akme": "Acme"}}},
+                      "scenes": [{"at": 0, "shot": "screen"}]}, self.d)
+        fixes = sc["style"]["captions"]["fix"]
+        self.assertEqual(fixes, {"Field Pal": "FieldPal", "Akme": "Acme"})  # merged, not replaced
+        words = [(0.0, 0.4, "the"), (0.5, 0.7, "field"), (0.7, 0.9, "pal,"), (1.0, 1.2, "akme."), (1.3, 1.4, "pal")]
+        out = R.apply_fixes(words, fixes)
+        self.assertEqual([w[2] for w in out], ["the", "FieldPal,", "Acme.", "pal"])  # case-insensitive, punctuation kept
+        self.assertEqual(out[1][:2], (0.5, 0.9))                                     # spans both words' times
+        self.assertEqual(S.theme_vocabulary("fp"), ["FieldPal"])
+
+    def test_vocabulary_sources_combine(self):
+        from unittest import mock
+        from pugrec import transcript
+        with open(os.path.join(self.cfg, "pugrec", "themes", "fp.yaml"), "w") as f:
+            f.write("vocabulary: [FieldPal, Acme]\n")
+        with mock.patch("pugrec.recorder.config", return_value={"vocabulary": ["PugPal", "acme"]}):
+            self.assertEqual(transcript.vocabulary("Hyprland, FieldPal", "fp"), ["PugPal", "acme", "FieldPal", "Hyprland"])
+
+    def test_unknown_theme_lists_available(self):
+        with self.assertRaises(S.ScriptError) as cm:
+            S.parse({"style": {"theme": "acmee"}, "scenes": [{"at": 0, "shot": "screen"}]}, self.d)
+        self.assertIn("unknown theme 'acmee' (available: acme)", str(cm.exception))
+
+    def test_theme_keys_validated(self):
+        with open(os.path.join(self.cfg, "pugrec", "themes", "bad.yaml"), "w") as f:
+            f.write("accnt: '#000000'\n")
+        with self.assertRaises(S.ScriptError) as cm:
+            S.parse({"style": {"theme": "bad"}, "scenes": [{"at": 0, "shot": "screen"}]}, self.d)
+        self.assertIn("theme bad: unknown key 'accnt' (did you mean 'accent'?)", str(cm.exception))
+
+    def test_accent_reaches_rings_and_captions(self):
+        p = plan({"style": {"theme": "acme"}, "scenes": [{"at": 0, "shot": {"window": {"title": "right"}}, "fit": "cover"}]}, self.d)
+        rings = [l for l in frame_at(p, 2.1)["layers"] if l["type"] == "ring"]
+        texts = [l for l in frame_at(p, 1.6)["layers"] if l["type"] == "text"]
+        self.assertEqual(rings[0]["color"], "#0055ff")
+        self.assertEqual((texts[0]["hi"], texts[0]["color"], texts[0]["font"]), ("#0055ff", "#ffffff", "DejaVu Sans"))
+
+    def test_defaults_round_trip_as_a_theme(self):
+        import contextlib, io
+        from pugrec import __main__ as cli
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cli.main(["themes", "--defaults"])
+        with open(os.path.join(self.cfg, "pugrec", "themes", "pugpal.yaml"), "w") as f:
+            f.write(buf.getvalue())
+        a = S.parse({"style": {"theme": "pugpal"}, "scenes": [{"at": 0, "shot": "screen"}]}, self.d)["style"]
+        b = S.parse({"scenes": [{"at": 0, "shot": "screen"}]}, self.d)["style"]
+        a.pop("theme"), b.pop("theme")
+        self.assertEqual(a, b)                                        # pugpal.yaml = today's look exactly
+
+    def test_logo_and_title_cards(self):
+        from PIL import Image
+        logo = os.path.join(self.tmp.name, "logo.png")
+        Image.new("RGBA", (200, 100), (255, 0, 0, 255)).save(logo)
+        p = plan({"style": {"theme": "acme", "logo": {"file": logo, "corner": "top-right", "size": 0.1}},
+                  "intro": {"title": "Acme demo", "subtitle": "Q4", "duration": 2},
+                  "outro": "Thanks",
+                  "scenes": [{"at": 0, "shot": "screen"}]}, self.d)
+        self.assertAlmostEqual(p["duration"], 2 + 10 + 3)              # intro + recording + outro (style default 3 s)
+        first = frame_at(p, 1.0)
+        self.assertEqual(first["src"], "card:intro")
+        texts = [l["words"][0]["w"] for l in first["layers"] if l["type"] == "text"]
+        self.assertEqual(texts, ["Acme demo", "Q4"])
+        self.assertEqual(first["layers"][0]["color"], "#002244")      # the theme's card background
+        imgs = [l for l in frame_at(p, 5.0)["layers"] if l["type"] == "image"]
+        self.assertEqual(len(imgs), 1)
+        x, y, w, h = imgs[0]["dst"]
+        self.assertAlmostEqual(w, 192.0)                              # 10% of 1920 wide...
+        self.assertAlmostEqual(h, 96.0)                               # ...keeping the 2:1 aspect
+        self.assertGreater(x, 1600)                                   # top-right
+        self.assertIn(logo, p["images"])
+        self.assertEqual(frame_at(p, 14.0)["src"], "card:outro")
+
+    def test_card_fades(self):
+        def ops(f):
+            return [l.get("opacity", 1) for l in f["layers"] if l["type"] in ("text", "image")]
+        p = plan({"intro": "Hi", "outro": "Bye", "scenes": [{"at": 0, "shot": "screen"}]}, self.d)
+        self.assertEqual(set(ops(p["frames"][0])), {1.0})              # intro frame 0 = the thumbnail, fully drawn
+        self.assertLess(max(ops(frame_at(p, 2.9))), 0.5)              # the intro still fades out
+        self.assertLess(max(ops(frame_at(p, 13.05))), 0.5)             # the outro still fades in
+        p = plan({"style": {"card": {"fade_in": 0.5, "fade_out": 0}}, "intro": "Hi",
+                  "outro": {"title": "Bye", "fade_in": 0},
+                  "scenes": [{"at": 0, "shot": "screen"}]}, self.d)
+        self.assertEqual(max(ops(p["frames"][0])), 0.0)                # a theme can bring the fade back
+        self.assertEqual(set(ops(frame_at(p, 2.9))), {1.0})           # fade_out 0: drawn to the cut
+        self.assertEqual(set(ops(frame_at(p, 13.01))), {1.0})          # per card wins
+
+    def test_theme_cards_and_card_icon(self):
+        from PIL import Image
+        tdir = os.path.join(self.cfg, "pugrec", "themes")
+        Image.new("RGBA", (100, 100), (0, 0, 255, 255)).save(os.path.join(tdir, "icon.png"))
+        with open(os.path.join(tdir, "brand.yaml"), "w") as f:
+            f.write("outro: {title: 'Thanks', subtitle: brand.example, duration: 2}\n"
+                    "card: {image: icon.png, image_size: 0.2}\n")       # icon relative to the theme file
+        base = {"style": {"theme": "brand"}, "scenes": [{"at": 0, "shot": "screen"}]}
+        p = plan(base, self.d)
+        self.assertAlmostEqual(p["duration"], 10 + 2)                  # the theme's outro
+        last = frame_at(p, 11.0)
+        self.assertEqual(last["src"], "card:outro")
+        icon = [l for l in last["layers"] if l["type"] == "image"]
+        self.assertEqual(len(icon), 1)
+        x, y, w, h = icon[0]["dst"]
+        self.assertAlmostEqual(h, 0.2 * 1080)                          # image_size of the shorter side
+        self.assertAlmostEqual(x + w / 2, 960)                         # centred
+        title_y = [l for l in last["layers"] if l["type"] == "text"][0]["y"]
+        self.assertLess(y + h, title_y)                                # above the title
+        own = plan(dict(base, outro="Bye"), self.d)                    # the edit's own outro wins
+        self.assertEqual([l["words"][0]["w"] for l in frame_at(own, 11.0)["layers"] if l["type"] == "text"][0], "Bye")
+        off = plan(dict(base, outro=False), self.d)                    # outro: false = none
+        self.assertAlmostEqual(off["duration"], 10)
+
+    def test_sparkle_only_with_a_theme_that_has_it(self):
+        scenes = [{"at": 0, "shot": "screen"}, {"at": 5, "shot": "camera", "transition": {"sparkle": 0.8}}]
+        for style in ({}, {"theme": "acme"}):                           # plain, and another theme
+            with self.assertRaises(S.ScriptError) as cm:
+                S.parse({"style": style, "scenes": scenes}, self.d)
+            self.assertIn("only work with a theme that has a `sparkle:` section", str(cm.exception))
+        with self.assertRaises(S.ScriptError):                         # not as a style default either
+            S.parse({"style": {"transition": {"sweep": 1}}, "scenes": [{"at": 0, "shot": "screen"}]}, self.d)
+        S.parse({"style": {"sparkle": {"colors": ["#ffffff"]}}, "scenes": scenes}, self.d)  # configured: fine
+
+    def test_sweep_reveals_behind_the_sprite_with_stars(self):
+        from PIL import Image
+        sprite = os.path.join(self.tmp.name, "sprite.png")
+        Image.new("RGBA", (200, 100), (255, 0, 255, 255)).save(sprite)
+        data = {"style": {"sparkle": {"colors": ["#ec1d83", "#3eafe0"], "image": sprite, "image_size": 0.3,
+                                      "pixelated": True}},
+                "scenes": [{"at": 0, "shot": "screen", "bubble": False},
+                           {"at": 5, "shot": "camera", "transition": {"sweep": 1.0}},
+                           {"at": 8, "shot": "screen", "transition": {"sparkle": 0.8}, "bubble": False}]}
+        p = plan(data, self.d)
+        mid = frame_at(p, 5.5)["layers"]
+        clipped = [l for l in mid if l.get("clip")]
+        sprite_l = [l for l in mid if l["type"] == "image" and l.get("pixelated")]
+        stars = [l for l in mid if l["type"] == "star"]
+        self.assertTrue(clipped and all(l["src"].endswith("/camera") for l in clipped if l["type"] == "video"))
+        self.assertEqual(len(sprite_l), 1)
+        edge = clipped[0]["clip"][2]
+        x, y, w, h = sprite_l[0]["dst"]
+        self.assertAlmostEqual(x + w / 2, edge, delta=2)                # revealed up to the sprite's middle
+        self.assertTrue(stars and {s["color"] for s in stars} <= {"#ec1d83", "#3eafe0"})
+        self.assertFalse([l for l in frame_at(p, 6.5)["layers"] if l.get("clip") or l["type"] == "star"])  # done
+        burst = [l for l in frame_at(p, 8.3)["layers"] if l["type"] == "star"]
+        self.assertTrue(burst)
+        again = [l for l in frame_at(plan(data, self.d), 8.3)["layers"] if l["type"] == "star"]
+        self.assertEqual(burst, again)                                 # deterministic: preview == build
+
+    def test_card_audio_is_silence_in_place(self):
+        from pugrec.edit import compose
+        p = plan({"intro": {"title": "Hi", "duration": 1}, "scenes": [{"at": 0, "shot": "screen"}]}, self.d)
+        p["audio"] = [{"source": "main", "file": "/x/mic-clean.flac"}]
+        _, filt = compose.audio_args(p, p["frames"], 1)
+        self.assertTrue(filt.startswith("anullsrc=r=48000:cl=mono,atrim=duration=1.0000"))  # intro first
+        self.assertIn("[1:a:0]atrim=start=0.0000", filt)                                     # then the recording
+
+
+class StartMarker(unittest.TestCase):
+    def test_edit_begins_after_the_countdown(self):
+        from pugrec.edit import draft
+        with tempfile.TemporaryDirectory() as d:
+            make_session(d)
+            with open(os.path.join(d, "session.jsonl"), "a") as f:
+                f.write(json.dumps({"t": int(1.5 * SEC), "type": "marker", "name": "start", "countdown": 3}) + "\n")
+            p = plan({"cuts": [[4, 5]], "scenes": [{"at": 0, "shot": "screen"}]}, d)
+            self.assertAlmostEqual(p["frames"][0]["st"], 1.5)          # warm-up skipped
+            self.assertAlmostEqual(p["duration"], 10 - 1.5 - 1.0)
+            p = plan({"timeline": [{"source": "main", "to": 3}], "scenes": [{"at": 0, "shot": "screen"}]}, d)
+            self.assertAlmostEqual(p["duration"], 1.5)                 # from defaults to the marker
+            path, _ = draft.draft(d)
+            self.assertEqual(S.load(path)["scenes"][0]["at"], 1.5)    # the intro starts there too
+
+
+class Draft(unittest.TestCase):
+    def test_draft_follows_focus_and_validates(self):
+        from pugrec.edit import draft
+        with tempfile.TemporaryDirectory() as d:
+            make_session(d)
+            path, n = draft.draft(d)
+            sc = S.load(path)                                      # the draft is a valid script
+            shots = [s["shot"] for s in sc["scenes"]]
+            self.assertEqual(shots[0]["kind"], "camera")           # intro
+            addrs = [s["select"].get("address") for s in shots if s["kind"] == "window"]
+            self.assertEqual(addrs[0], "0xb")                      # focused right window first...
+            self.assertEqual(addrs[-1], "0xa")                     # ...then the left one (focus at 7 s)
+            self.assertTrue(path.endswith("edit.yaml"))
+            self.assertEqual(sc["style"]["spotlight"]["window"], {"address": "0xb"})  # the most-focused window
+            path2, _ = draft.draft(d)
+            self.assertTrue(path2.endswith("edit.draft.yaml"))     # never overwrites an edit
+
+    def test_ignore_is_anchored(self):
+        from pugrec.edit.draft import IGNORE_CLASS
+        self.assertFalse(IGNORE_CLASS.match("chrome-eoficlgicibekocmfdomjbfnjmehnhcd-Profile_6"))
+        self.assertTrue(IGNORE_CLASS.match("com.danklinux.dms"))
+        self.assertTrue(IGNORE_CLASS.match("rofi"))
+
+
+if __name__ == "__main__":
+    unittest.main()

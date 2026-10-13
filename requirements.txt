@@ -1,0 +1,7 @@
+# .venv for the post-processing commands (render, faces, audio). Recording needs none of this.
+#   python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+numpy==2.5.4                      # frames and audio as arrays
+opencv-python-headless==5.0.0.93  # crop/resize/composite frames; YuNet face detector
+onnxruntime==1.31.0               # runs the Silero VAD speech detector (pulls flatbuffers, protobuf, packaging)
+pyyaml==6.0.3                     # edit.yaml (scene scripts)
+pillow==12.3.0                    # caption text in builds (IBM Plex from the image)

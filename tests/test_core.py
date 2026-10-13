@@ -1,0 +1,234 @@
+"""Pure-logic tests (no Hyprland, no video).  python3 -m unittest discover tests"""
+
+import os
+import sys
+import tempfile
+import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import fake_session  # noqa: E402
+from pugrec import hypr, jsonl, recorder  # noqa: E402
+from pugrec.render import Camera, Timeline, face_crop_path  # noqa: E402
+
+
+class JsonlTest(unittest.TestCase):
+    def test_roundtrip_sorted_and_truncated_line_skipped(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "s.jsonl")
+            w = jsonl.Writer(p)
+            w.write({"t": 5, "type": "b"})
+            w.write({"t": 1, "type": "a"})
+            w.close()
+            with open(p, "a") as f:
+                f.write('{"t": 9, "type": "cra')  # crash mid-line
+            self.assertEqual([r["type"] for r in jsonl.read(p)], ["a", "b"])
+
+    def test_writer_appends_to_existing_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "s.jsonl")
+            for t in (1, 2):
+                w = jsonl.Writer(p)
+                w.write({"t": t, "type": "x"})
+                w.close()
+            self.assertEqual(len(jsonl.read(p)), 2)
+
+
+class WindowDiffTest(unittest.TestCase):
+    def test_open_update_close(self):
+        a = dict(fake_session.LEFT)
+        b = dict(fake_session.RIGHT)
+        moved = dict(a, at=[100, 100])
+        evs = hypr.diff_windows({"0xa": a, "0xb": b}, {"0xa": moved, "0xc": dict(b, address="0xc")})
+        types = sorted(e["type"] for e in evs)
+        self.assertEqual(types, ["window_close", "window_open", "window_update"])
+        upd = next(e for e in evs if e["type"] == "window_update")
+        self.assertEqual(upd, {"type": "window_update", "address": "0xa", "at": [100, 100]})
+
+    def test_no_change_no_events(self):
+        a = dict(fake_session.LEFT)
+        self.assertEqual(hypr.diff_windows({"0xa": a}, {"0xa": dict(a)}), [])
+
+
+class RedactTest(unittest.TestCase):
+    def test_password_windows(self):
+        for name in ("1Password", "pinentry-gnome3", "polkit-gnome-authentication-agent-1", "gcr-prompter"):
+            self.assertTrue(recorder.REDACT_RE.search(name), name)
+        for name in ("kitty", "google-chrome", "code"):
+            self.assertFalse(recorder.REDACT_RE.search(name), name)
+
+
+class CameraTest(unittest.TestCase):
+    def setUp(self):
+        self.tl = Timeline(list(fake_session.records()))
+        self.cam = Camera(self.tl, 16 / 9, zoom=2.0)
+
+    def test_widest_view_has_no_bars(self):
+        self.assertEqual(self.cam.max_w, 2160 * 16 / 9)  # 3840 on a 5120x2160 screen
+
+    def test_zooms_in_on_clicks_and_frames_window_otherwise(self):
+        # At the click the target is fully zoomed in, around the cursor.
+        cx, cy, w = self.cam.target(2.0)
+        self.assertAlmostEqual(w, self.cam.min_w)
+        self.assertLess(abs(cx - self.tl.cursor_at(2.0)[0]), w / 2)
+        # Long after any activity: the focused (left) window, clamped to the widest view.
+        cx, cy, w = self.cam.target(9.5)
+        self.assertEqual(w, self.cam.max_w)
+        self.assertLess(cx, fake_session.W / 2)
+
+    def test_leads_activity(self):
+        # 0.3 s before the first click the camera already targets it.
+        self.assertAlmostEqual(self.cam.target(1.7)[2], self.cam.min_w)
+
+    def test_path_stays_on_screen(self):
+        for cx, cy, w in self.cam.path(30):
+            h = w / (16 / 9)
+            self.assertGreaterEqual(cx - w / 2, -1e-6)
+            self.assertLessEqual(cx + w / 2, fake_session.W + 1e-6)
+            self.assertGreaterEqual(cy - h / 2, -1e-6)
+            self.assertLessEqual(cy + h / 2, fake_session.H + 1e-6)
+
+    def test_path_is_smooth(self):
+        path = self.cam.path(60)
+        jumps = [abs(b[0] - a[0]) for a, b in zip(path, path[1:])]
+        self.assertLess(max(jumps), 120)  # px per frame at 60 fps
+
+
+class FaceCropTest(unittest.TestCase):
+    A = 16 / 9
+
+    def test_no_track_is_centre_square(self):
+        self.assertEqual(face_crop_path(None, 30, 0, 3, self.A), [(self.A / 2, 0.5, 1.0)] * 3)
+
+    def test_follows_off_centre_face(self):
+        # Face steadily at 25% of the width: the crop centres on it (as far as the edge allows).
+        track = [(t / 10, 0.25, 0.5, 0.3) for t in range(50)]
+        cx, cy, side = face_crop_path(track, 30, 0, 120, self.A)[-1]
+        self.assertAlmostEqual(side, 0.55)                     # tight: face h 0.3 * 1.7 -> min 0.55
+        self.assertAlmostEqual(cx, 0.25 * self.A, places=2)    # on the face
+
+    def test_stays_inside_frame_and_moves_smoothly(self):
+        track = [(0, 0.05, 0.5, 0.6), (1, 0.95, 0.5, 0.6)]  # a face that jumps across
+        path = face_crop_path(track, 30, 0, 60, self.A)
+        for cx, cy, side in path:
+            self.assertGreaterEqual(cx - side / 2, -1e-9)
+            self.assertLessEqual(cx + side / 2, self.A + 1e-9)
+        steps = [abs(b[0] - a[0]) for a, b in zip(path, path[1:])]
+        self.assertLess(max(steps), 0.05)  # < 5% of frame height per frame
+
+
+class SpeechGateTest(unittest.TestCase):
+    def setUp(self):
+        try:
+            import numpy  # noqa: F401
+        except ImportError:
+            self.skipTest("numpy (the .venv)")
+        from pugrec import audio
+        self.audio = audio
+
+    def test_segments_pad_and_merge(self):
+        hop = 512 / 16000
+        probs = [0.0] * 10 + [0.9] * 20 + [0.1] * 5 + [0.9] * 20 + [0.0] * 40  # a 0.16 s pause
+        segs = self.audio.speech_segments(probs)
+        self.assertEqual(len(segs), 1)                               # short pause merged
+        self.assertAlmostEqual(segs[0][0], 10 * hop - self.audio.PAD_PRE, places=6)
+
+    def test_breath_between_sentences_is_lowered(self):
+        hop = 512 / 16000
+        probs = [0.9] * 30 + [0.1] * 60 + [0.9] * 30                 # ~1.9 s gap: a breath
+        segs = self.audio.speech_segments(probs)
+        self.assertEqual(len(segs), 2)
+        n = int(120 * hop * 48000)
+        g = self.audio.gain_curve(n, segs)
+        mid = int(60 * hop * 48000)
+        self.assertAlmostEqual(float(g[mid]), 10 ** (self.audio.BREATH_DB / 20), places=5)
+        self.assertEqual(float(g[int(10 * hop * 48000)]), 1.0)
+        self.assertLess(float(abs(g[1:] - g[:-1]).max()), 0.01)     # smooth fades, no clicks
+
+
+class TranscriptTest(unittest.TestCase):
+    def test_tokens_to_words(self):
+        from pugrec.transcript import words_from_tokens
+        toks = [{"text": "[_BEG_]", "offsets": {"from": 0, "to": 0}},
+                {"text": " Hello", "offsets": {"from": 100, "to": 400}, "t_dtw": 12, "p": 0.9},
+                {"text": " demo", "offsets": {"from": 400, "to": 600}, "t_dtw": 45, "p": 0.8},
+                {"text": "nstrate", "offsets": {"from": 600, "to": 900}, "t_dtw": 60, "p": 0.7},
+                {"text": "[_TT_50]", "offsets": {"from": 900, "to": 900}}]
+        ws = words_from_tokens(toks, 1000)
+        self.assertEqual([w["w"] for w in ws], ["Hello", "demonstrate"])
+        self.assertEqual(ws[0]["t"], 120)          # DTW start (centiseconds -> ms)
+        self.assertEqual(ws[0]["end"], 400)        # clipped to the next word's start (450)
+        self.assertEqual(ws[1]["end"], 900)
+        self.assertEqual(ws[1]["p"], 0.7)          # weakest token
+
+    def test_suggest_cuts(self):
+        from pugrec.transcript import suggest_cuts
+        S = 1_000_000_000
+        seg = {"words": [{"t": 0, "end": 1 * S, "w": "So"},
+                         {"t": 4 * S, "end": int(4.3 * S), "w": "um,"},
+                         {"t": int(4.5 * S), "end": 5 * S, "w": "this"}]}
+        cuts = suggest_cuts([seg])
+        self.assertEqual(cuts[0], [1.3, 3.7])          # 3 s pause, 0.3 s kept each side
+        self.assertEqual(cuts[1], [3.95, 4.35])        # the filler word
+
+
+class VideoStallTest(unittest.TestCase):
+    def check(self, last_frame_s, last_move_s):
+        import argparse
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            s = recorder.Session(argparse.Namespace(dir=d))
+            s.anchor = 1_000_000_000
+            s.screen_file = os.path.join(d, "screen.mkv")
+            s.last_cursor_move = s.anchor + int(last_move_s * 1e9)
+            sent = []
+            with mock.patch("pugrec.edit.resolve.last_pts", return_value=last_frame_s), \
+                    mock.patch.object(recorder, "notify", lambda *a, **k: sent.append(a)):
+                s.check_video_stall()
+            s.out.close()
+            return sent
+
+    def test_cursor_moving_after_the_last_frame_is_a_stall(self):
+        sent = self.check(63.8, 94.0)
+        self.assertEqual(len(sent), 1)
+        self.assertIn("stopped at 63.8s", sent[0][1])
+
+    def test_still_screen_at_the_end_is_fine(self):
+        self.assertEqual(self.check(90.0, 91.0), [])     # cursor stopped soon after the last frame
+
+
+class SetupModelTest(unittest.TestCase):
+    def test_download_verify_skip_and_replace(self):
+        import hashlib
+        from unittest import mock
+        from pugrec import setup, transcript
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "model.bin")
+            with open(src, "wb") as f:
+                f.write(b"pretend whisper model" * 1000)
+            sha = hashlib.sha256(open(src, "rb").read()).hexdigest()
+            cache = os.path.join(d, "cache")
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": cache}), \
+                    mock.patch.object(transcript, "MODEL_URL", "file://" + src), \
+                    mock.patch.object(transcript, "MODEL_SHA256", sha):
+                dst = os.path.join(cache, "pugrec", transcript.MODEL)
+                setup.model()                                          # downloads + verifies
+                self.assertEqual(open(dst, "rb").read(), open(src, "rb").read())
+                self.assertFalse(os.path.exists(dst + ".part"))
+                mtime = os.path.getmtime(dst)
+                setup.model()                                          # present + valid: skipped
+                self.assertEqual(os.path.getmtime(dst), mtime)
+                with open(dst, "wb") as f:
+                    f.write(b"corrupt")
+                setup.model()                                          # wrong hash: replaced
+                self.assertEqual(open(dst, "rb").read(), open(src, "rb").read())
+                with mock.patch.object(transcript, "MODEL_SHA256", "0" * 64):
+                    os.unlink(dst)
+                    with self.assertRaises(setup.SetupError):          # bad download: refused, no file
+                        setup.model()
+                    self.assertFalse(os.path.exists(dst) or os.path.exists(dst + ".part"))
+
+
+if __name__ == "__main__":
+    unittest.main()
