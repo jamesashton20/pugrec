@@ -137,7 +137,7 @@ def ensure_derived(sc):
     """Face tracks the plan needs (camera framing, bubble), computed once if missing."""
     from . import faces
     for s in sc["sources"].values():
-        if os.path.exists(os.path.join(s["path"], "camera.mkv")) and faces.load(s["path"]) is None:
+        if faces.needed(s["path"]):
             faces.detect(s["path"])
 
 

@@ -85,6 +85,12 @@ def detect(session_dir):
     return out_path
 
 
+def needed(session_dir):
+    """True when the session has a camera but no face track yet (build/preview make it then)."""
+    return (os.path.exists(os.path.join(session_dir, "camera.mkv"))
+            and not os.path.exists(os.path.join(session_dir, "faces.jsonl")))
+
+
 def load(session_dir):
     """[(t_seconds, cx, cy, h)] in camera fractions, or None if there's no faces.jsonl."""
     p = os.path.join(session_dir, "faces.jsonl")

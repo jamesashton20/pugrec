@@ -96,7 +96,9 @@ pugrec transcript SESSION   # transcript.jsonl, on the GPU. ~10 s per 2 min. --c
 pugrec draft SESSION        # edit.yaml (or edit.draft.yaml): a first edit from the timeline
 ```
 Run `audio` before `transcript` (the transcript is made from the cleaned audio). `faces` runs
-by itself when a build or preview needs it.
+by itself when a build or preview needs it: `build` first (~30 s for a 2 min camera), `preview` in
+the background (the page works at once; camera shots re-frame on the face when it's done, the log
+says `faces: ... -> faces.jsonl` and `resolved ... (v2)`).
 
 ## 5. Reading what happened
 

@@ -87,7 +87,28 @@ class State:
         self.media = {}       # url path -> file path
         self.sizes = {}
         self.mtimes = None
+        self.tracking = set()  # sessions whose face track is being made in the background
         self.reload()
+
+    def track_faces(self, sc):
+        """Make a missing faces.jsonl (camera framing) in the background, like build does up
+        front: the page is usable at once (camera shots centred until then), and the watcher
+        re-resolves when the file appears - it's written whole, then swapped in."""
+        from .. import faces
+        for s in sc["sources"].values():
+            path = s["path"]
+            if path in self.tracking or not faces.needed(path):
+                continue
+            self.tracking.add(path)
+            print(f"preview: tracking the face in {os.path.basename(path)}/camera.mkv "
+                  "(the camera framing updates when it's done)", file=sys.stderr)
+
+            def run(path=path):
+                try:
+                    faces.detect(path)
+                except Exception as e:  # noqa: BLE001 - the preview keeps working without it
+                    print(f"preview: face tracking failed: {e}", file=sys.stderr)
+            threading.Thread(target=run, name="faces", daemon=True).start()
 
     def watched(self):
         files = [self.edit_path]
@@ -110,6 +131,7 @@ class State:
         self.mtimes = self.stamp()
         try:
             sc = script.load(self.edit_path)
+            self.track_faces(sc)
             sessions = resolve.load_sessions(sc)
             for name, sess in sessions.items():
                 for kind, path in make_proxies(sess).items():
