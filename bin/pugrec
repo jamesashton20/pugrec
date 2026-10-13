@@ -8,5 +8,6 @@ if [[ "${1:-}" =~ ^(render|faces|audio|check|build|preview|proxy|draft|themes)$ 
     py="$here/.venv/bin/python"
     [[ -x "$py" ]] || { echo "pugrec: run 'pugrec setup' first (makes .venv)" >&2; exit 1; }
 fi
-cd "$here"
+# No cd: relative paths (a session, an edit.yaml) are the caller's. The package comes from here.
+export PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}"
 exec "$py" -m pugrec "$@"
