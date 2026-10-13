@@ -5,8 +5,9 @@ monitor) and turns them into edited videos. This guide is for software (an AI ag
 that operates it on James's behalf. It says what to run, in what order, what every step
 produces, how to check the result, and which steps need a human.
 
-- Repo: `~/git/pugscreenrecord`. Run everything through the launcher: `bin/pugrec <command>`
-  (it picks the right Python; the post-processing commands need `.venv`, already set up).
+- Repo: `~/git/pugrec`. Run everything as `pugrec <command>` (on PATH: `~/.local/bin/pugrec`
+  links to the repo's `bin/pugrec` launcher, which picks the right Python; the post-processing
+  commands need `.venv`, already set up). Relative paths are taken from your current directory.
 - This guide is self-contained: recording (sections 3-4), editing (5-7, and the complete
   `edit.yaml` reference in the appendix), building and checking (8-9). In the repo, `EDIT.md`,
   `FORMAT.md` (every data record) and `README.md` have more background.
@@ -50,7 +51,7 @@ video**. `edit.yaml` uses the same seconds ("source seconds").
 ## 3. Recording (with James)
 
 ```bash
-bin/pugrec record                    # in a terminal James can see
+pugrec record                    # in a terminal James can see
 ```
 What happens, in order (James usually starts it with **Super+Alt+R** or the Stream Deck Rec key,
 both `pugrec toggle`; a second press stops it):
@@ -61,7 +62,7 @@ both `pugrec toggle`; a second press stops it):
    recorders start (Cancel / Esc works).
 3. **3-2-1** in the same circle (Space or clicking the circle pauses; Esc/Cancel discards).
 4. Recording (`● recording` in the terminal / `$XDG_RUNTIME_DIR/pugrec.log`). Stop: the same key,
-   **Ctrl+C**, or `bin/pugrec stop`.
+   **Ctrl+C**, or `pugrec stop`.
 Stopping or cancelling **before the countdown ends discards** the session (nothing is kept). After
 it, everything is kept; edits start at the `start` marker (the end of the countdown). Loud
 notifications warn if the mic is muted, the camera is busy (naming the program holding it), or the
@@ -78,7 +79,7 @@ unmutes it (that's James's privacy switch, the Stream Deck "Mic" key / `hotmic`)
 
 **Check a recording:**
 ```bash
-bin/pugrec info SESSION
+pugrec info SESSION
 ```
 Look for: a `duration` (missing = it crashed or is still recording), `stream screen` and
 `stream camera`, events including `marker 1`, `button` counts > 0 (clicks were captured; `key`
@@ -89,10 +90,10 @@ counts only with `--keys`), and in `session.jsonl` a `mic_mute` line with `"mute
 ## 4. Post-processing, in this order
 
 ```bash
-bin/pugrec audio SESSION        # mic-clean.flac: noise, keyboard taps, breaths out; -16 LUFS. ~5 s per 20 s
-bin/pugrec transcript SESSION   # transcript.jsonl, on the GPU. ~10 s per 2 min. --cuts prints suggested cuts
+pugrec audio SESSION        # mic-clean.flac: noise, keyboard taps, breaths out; -16 LUFS. ~5 s per 20 s
+pugrec transcript SESSION   # transcript.jsonl, on the GPU. ~10 s per 2 min. --cuts prints suggested cuts
                                 #   --prompt "Acme, FieldPal" / --theme NAME: names to spell right
-bin/pugrec draft SESSION        # edit.yaml (or edit.draft.yaml): a first edit from the timeline
+pugrec draft SESSION        # edit.yaml (or edit.draft.yaml): a first edit from the timeline
 ```
 Run `audio` before `transcript` (the transcript is made from the cleaned audio). `faces` runs
 by itself when a build or preview needs it.
@@ -195,7 +196,7 @@ Rules that matter:
 ## 7. Validate
 
 ```bash
-bin/pugrec check SESSION        # exit 1 + "error: <where>: <what> (did you mean ...?)" if invalid
+pugrec check SESSION        # exit 1 + "error: <where>: <what> (did you mean ...?)" if invalid
 ```
 On success it prints each output's length and every scene with its source and output time,
 plus warnings. Fix errors; read warnings (e.g. a `move` that had to become a fade, a window
@@ -204,18 +205,18 @@ selector that matched nothing). A scene shown as "not shown (cut)" lies entirely
 ## 8. Preview (for James) and build
 
 ```bash
-bin/pugrec preview SESSION                 # browser page; updates whenever edit.yaml is saved
-bin/pugrec preview SESSION --no-open       # just the server; prints the URL (next free port from 8765)
+pugrec preview SESSION                 # browser page; updates whenever edit.yaml is saved
+pugrec preview SESSION --no-open       # just the server; prints the URL (next free port from 8765)
 ```
 The page plays the edit as it will be built: output tabs (main/vertical), scene list, scrub bar.
 Links like `http://127.0.0.1:8765/#t=12.5&o=vertical` open at a time and output.
 
 ```bash
-bin/pugrec build SESSION                   # build-main.mp4 + build-vertical.mp4 next to edit.yaml
-bin/pugrec build SESSION --hq              # final export: CRF 14, preset slow (bigger, slower)
-bin/pugrec build SESSION --output main --from 4 --to 12    # a quick partial build (output seconds)
-bin/pugrec build SESSION --whatsapp        # also build-<output>-whatsapp.mp4 per output
-bin/pugrec whatsapp SESSION/build-vertical.mp4   # a WhatsApp copy of any MP4/MKV (~30 s), raw recordings too
+pugrec build SESSION                   # build-main.mp4 + build-vertical.mp4 next to edit.yaml
+pugrec build SESSION --hq              # final export: CRF 14, preset slow (bigger, slower)
+pugrec build SESSION --output main --from 4 --to 12    # a quick partial build (output seconds)
+pugrec build SESSION --whatsapp        # also build-<output>-whatsapp.mp4 per output
+pugrec whatsapp SESSION/build-vertical.mp4   # a WhatsApp copy of any MP4/MKV (~30 s), raw recordings too
 ```
 **WhatsApp** plays a video inline only when it follows Meta's media rules: MP4, H.264 + AAC,
 one audio stream, **no High profile with B-frames** (Android clients can't play it), moov at
