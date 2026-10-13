@@ -63,7 +63,7 @@ coordinates**, as Hyprland reports them. Screen video pixels:
 | `button` | `code` (`BTN_LEFT`, `BTN_RIGHT`, `BTN_MIDDLE`, ...), `value` 1 down / 0 up | from the input helper |
 | `wheel` | `code` "vertical"/"horizontal", `value` (steps, sign = direction) | from the input helper |
 | `key` | `code` (`KEY_A`, ... evdev names), `value` 1 down / 0 up / 2 repeat, `mods` (["ctrl", "shift", "alt", "super"] held), or `redacted: true` instead of `code` | from the input helper |
-| `input_devices` | `devices` [names] | input helper started |
+| `input_devices` | `devices` [names], `keys` (true = root helper, keyboards included; false = without root: what the session may read, usually just the mouse) | input helper started |
 | `window_open` | window state | new window (10 Hz poll) |
 | `window_update` | `address` + only the changed fields | moved, resized, retitled, ... |
 | `window_close` | `address` | gone |

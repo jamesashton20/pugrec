@@ -14,7 +14,8 @@ Built for PugPal (Hyprland on Fedora), main-pc's 5120x2160 screen in particular.
 ## Workflow
 
 ```bash
-bin/pugrec record                 # password (keys) -> overlay "Starting camera…" -> 3-2-1 -> go; Ctrl+C / `pugrec stop` ends
+bin/pugrec record                 # overlay "Starting camera…" -> 3-2-1 -> go; Ctrl+C / `pugrec stop` ends
+bin/pugrec record --keys          # also key presses: asks for your password first
                                   #   on the overlay: click the circle to pause, Cancel to discard
 S=~/Videos/PugRec/2026-10-13_14-38-12
 bin/pugrec audio $S               # mic-clean.flac: noise/keyboard/breaths out, -16 LUFS
@@ -25,7 +26,7 @@ bin/pugrec build $S               # build-main.mp4 (1920x1080) + build-vertical.
 bin/pugrec whatsapp $S/build-vertical.mp4   # a copy WhatsApp plays inline (H.264 Main, no B-frames, < 16 MB)
 ```
 
-Other commands: `record --no-input` (no keys/clicks, no prompt), `toggle` (for a keybind),
+Other commands: `record --no-input` (no keys, no clicks), `toggle` (for a keybind),
 `info SESSION`, `check SESSION` (validate an edit, list scenes), `faces SESSION`,
 `proxy SESSION`, `transcript --cuts` (print suggested cuts). `render` is an old auto-zoom test harness.
 
@@ -50,9 +51,11 @@ pinned SHA-256s.
   (main-pc's `hotmic`) is warned about, never unmuted.
 - **Webcam**: ffmpeg, MJPEG -> AV1 on the GPU, 1080p, synced by the kernel's frame timestamps.
 - **Cursor** and **windows** from Hyprland IPC.
-- **Keys, mouse buttons, wheel** via a small root helper (`pkexec`, this recording only, read-only,
-  security keys skipped). Key codes are redacted while 1Password/pinentry/polkit is focused or the
-  screen is locked.
+- **Mouse buttons and wheel** by default, read without root (the desktop lets your own session
+  read the mouse), so there's no password prompt. **Keys** only with `--keys` (or `keys = true` in
+  `~/.config/pugrec/config.toml`): a small root helper (`pkexec`, this recording only, read-only,
+  security keys skipped), so you type your password. Key codes are redacted while
+  1Password/pinentry/polkit is focused or the screen is locked.
 
 The session format is in [FORMAT.md](FORMAT.md); the edit script in [EDIT.md](EDIT.md).
 

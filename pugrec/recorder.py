@@ -73,6 +73,7 @@ def notify(summary, body="", urgency="normal", replace=None, expire_ms=None):
 def config():
     """~/.config/pugrec/config.toml: per-machine defaults for record options, e.g.
         mic = "output.podmic_raw"     # main-pc: the unprocessed PodMic; cleaned up afterwards
+        keys = true                   # always record key presses (asks for the password each time)
     Command-line flags win."""
     import tomllib
     p = os.path.join(os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")), "pugrec", "config.toml")
@@ -311,6 +312,10 @@ class Session:
         f = self.focus
         return self.locked or bool(self.lock_layers) or bool(REDACT_RE.search(f["class"]) or REDACT_RE.search(f["title"]))
 
+    def want_keys(self):
+        keys = getattr(self.args, "keys", None)
+        return bool(config().get("keys", False) if keys is None else keys)
+
     def start_input(self, privileged=True):
         cmd = ["/usr/bin/python3", "-I", HELPER]
         if privileged:
@@ -336,7 +341,7 @@ class Session:
                 if kind == "hello":
                     self.input_ready.set()  # the password is in; the rest of the recorder starts now
                     self.clock.wait()
-                    self.emit({"type": "input_devices", "devices": ev["devices"]})
+                    self.emit({"type": "input_devices", "devices": ev["devices"], "keys": privileged})
                     continue
                 if mono < self.anchor:  # typed while the screen recorder was still starting
                     continue
@@ -628,12 +633,14 @@ class Session:
         for sig in (signal.SIGINT, signal.SIGTERM):  # Ctrl+C / pugrec stop work from the first moment
             signal.signal(sig, lambda *_: self.stop.set())
         t0 = time.monotonic()
-        # 1. The password first. Nothing else starts until it's typed, so the prompt comes up
-        # at once (the screen recorder's first frame used to take up to 10 s before it).
+        # 1. Input first. With --keys that's the password prompt, and nothing else starts until it's
+        # typed, so it comes up at once (the screen recorder's first frame used to take up to 10 s).
+        # Keys need root (a password); clicks don't on a normal desktop (the mouse is readable
+        # through the seat's ACL), so keys are opt-in and most recordings don't prompt at all.
         if self.args.no_input:
             self.input_ready.set()
         else:
-            self.start_input()
+            self.start_input(privileged=self.want_keys())
         if not self.wait_for(self.input_ready, "password prompt / key helper", 90):
             return self.abandon()
         # 2. The overlay: a spinner (Cancel works) while everything else starts.

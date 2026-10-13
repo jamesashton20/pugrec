@@ -1,6 +1,6 @@
 """pugrec - record the screen plus what happened on it; render with automatic zoom.
 
-  pugrec record [--no-mic] [--mic SOURCE] [--no-input] [--no-camera] [--camera DEV] [--camera-size WxH]
+  pugrec record [--keys] [--no-mic] [--mic SOURCE] [--no-input] [--no-camera] [--camera DEV] [--camera-size WxH]
                 [--output DP-3] [--fps 60] [--dir DIR]
   pugrec stop
   pugrec toggle                      start, or stop if already recording (for a keybind)
@@ -226,7 +226,10 @@ def main(argv=None):
     r.add_argument("--fps", type=int, default=60)
     r.add_argument("--mic", help="PulseAudio/PipeWire source (default: the default source)")
     r.add_argument("--no-mic", action="store_true")
-    r.add_argument("--no-input", action="store_true", help="no keys/clicks (skips the root helper and its prompt)")
+    r.add_argument("--keys", action=argparse.BooleanOptionalAction, default=None,
+                   help="also record key presses: asks for your password (root helper). Default: clicks only, "
+                        "no prompt; `keys = true` in ~/.config/pugrec/config.toml makes --keys the default")
+    r.add_argument("--no-input", action="store_true", help="no keys and no clicks at all")
     r.add_argument("--camera", help="V4L2 device (default: first /dev/v4l/by-id/*-video-index0)")
     r.add_argument("--camera-size", default="1920x1080", help="MJPEG mode, e.g. 3840x2160 (default 1920x1080)")
     r.add_argument("--no-camera", action="store_true")

@@ -230,5 +230,24 @@ class SetupModelTest(unittest.TestCase):
                     self.assertFalse(os.path.exists(dst) or os.path.exists(dst + ".part"))
 
 
+class KeysOptInTest(unittest.TestCase):
+    """Keys need a password, so they're opt-in: --keys, or `keys = true` in config.toml."""
+    def want(self, flag, cfg):
+        import argparse
+        from unittest import mock
+        s = recorder.Session.__new__(recorder.Session)
+        s.args = argparse.Namespace(keys=flag)
+        with mock.patch.object(recorder, "config", return_value=cfg):
+            return s.want_keys()
+
+    def test_default_is_clicks_only(self):
+        self.assertFalse(self.want(None, {}))
+
+    def test_config_and_flags(self):
+        self.assertTrue(self.want(None, {"keys": True}))
+        self.assertTrue(self.want(True, {}))
+        self.assertFalse(self.want(False, {"keys": True}))   # --no-keys wins over the config
+
+
 if __name__ == "__main__":
     unittest.main()

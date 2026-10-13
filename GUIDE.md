@@ -13,8 +13,8 @@ produces, how to check the result, and which steps need a human.
 
 ## 1. Rules
 
-1. **Recording needs James.** He has to be at the computer: the key capture asks for his
-   password, and he does the demo. Don't start a recording on your own initiative.
+1. **Recording needs James.** He has to be at the computer: he does the demo, and key capture
+   (`--keys`) asks for his password. Don't start a recording on your own initiative.
 2. **No system changes.** No `sudo`, no package installs, no edits outside the repo and the
    session folders, no killing processes you didn't start. If something seems to need one, ask.
 3. **Don't open browser tabs or pop things up on his screen unasked.** Use `preview --no-open`
@@ -54,7 +54,9 @@ bin/pugrec record                    # in a terminal James can see
 ```
 What happens, in order (James usually starts it with **Super+Alt+R** or the Stream Deck Rec key,
 both `pugrec toggle`; a second press stops it):
-1. The **password prompt** (key capture; James types it). Nothing else starts before it.
+1. Only with `--keys` (or `keys = true` in config.toml): the **password prompt** for key capture;
+   James types it, and nothing else starts before it. Without it there's no prompt: clicks are
+   read without root.
 2. The **overlay**: the screen dims, a spinner says "Starting camera…" while the screen and camera
    recorders start (Cancel / Esc works).
 3. **3-2-1** in the same circle (Space or clicking the circle pauses; Esc/Cancel discards).
@@ -65,9 +67,10 @@ it, everything is kept; edits start at the `start` marker (the end of the countd
 notifications warn if the mic is muted, the camera is busy (naming the program holding it), or the
 screen video stalled (cursor kept moving after the last video frame).
 
-Useful flags: `--no-input` (no keys/clicks and no password prompt), `--countdown N`
+Useful flags: `--keys` (also key presses; password prompt), `--no-keys` (overrides config),
+`--no-input` (no keys, no clicks), `--countdown N`
 (`0` = none), `--no-camera`, `--no-mic`, `--mic SOURCE`, `--dir DIR`.
-For a test recording without James (e.g. checking the pipeline): `--no-input --countdown 0`
+For a test recording without James (e.g. checking the pipeline): `--countdown 0` (no `--keys`)
 into a temp `--dir`, and stop it with SIGINT (Ctrl+C) or `pugrec stop`.
 
 If the mic is muted, a critical notification says so and the audio is silence. pugrec never
@@ -78,8 +81,8 @@ unmutes it (that's James's privacy switch, the Stream Deck "Mic" key / `hotmic`)
 bin/pugrec info SESSION
 ```
 Look for: a `duration` (missing = it crashed or is still recording), `stream screen` and
-`stream camera`, events including `marker 1`, `button`/`key` counts > 0 (keys and clicks were
-captured), and in `session.jsonl` a `mic_mute` line with `"muted": false`. Mic level:
+`stream camera`, events including `marker 1`, `button` counts > 0 (clicks were captured; `key`
+counts only with `--keys`), and in `session.jsonl` a `mic_mute` line with `"muted": false`. Mic level:
 `ffmpeg -i SESSION/screen.mkv -map 0:a -af volumedetect -f null - 2>&1 | grep max_volume`
 (around -10 dB with speech; -91 dB = silence, the mic was muted).
 
@@ -244,7 +247,7 @@ can't look at images, at least compare durations and audio levels.
 | --- | --- |
 | `info` shows no duration | the recorder crashed or is still running (`pugrec stop`) |
 | Audio is silence (-91 dB) | the mic was muted while recording; nothing to recover, record again |
-| `button`/`key` counts are 0 | James dismissed the password prompt (only the mouse, or nothing, was captured) |
+| `key` count is 0 | recorded without `--keys` (the default), or James dismissed the password prompt (then only the mouse was captured) |
 | No camera stream | camera unplugged / busy; `notice` lines in `session.jsonl` say which |
 | `preview`: address in use | another server on the port; pugrec moves to the next free port and prints it |
 | `transcript`: whisper-cli missing | `scripts/build-whisper.sh` (builds it in a distrobox; James's go-ahead first) |
