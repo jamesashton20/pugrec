@@ -181,6 +181,16 @@ class Resolver(unittest.TestCase):
         blurs = [l for l in videos(frame_at(p, 5.5)) if l.get("blur")]
         self.assertTrue(blurs and 0 < blurs[0]["opacity"] < 1)
 
+    def test_move_cross_fades_a_colour_background(self):
+        # contain on a colour (not blur): the colour used to vanish for the whole move.
+        p = plan({"scenes": [{"at": 0, "shot": {"window": {"title": "left"}}, "fit": "contain",
+                              "background": "#123456", "bubble": False},
+                             {"at": 5, "shot": {"cursor": {"zoom": 2}}, "transition": {"move": 1.0},
+                              "bubble": False}]}, self.d)
+        fills = [l for l in frame_at(p, 5.5)["layers"] if l["type"] == "fill" and l["color"] == "#123456"]
+        self.assertTrue(fills and 0 < fills[0]["opacity"] < 1)
+        self.assertTrue(fills[0]["bg"])
+
     def test_spotlight_blurs_all_but_the_window(self):
         p = plan({"style": {"spotlight": {"window": {"title": "right"}}},
                   "scenes": [{"at": 0, "shot": "screen", "fit": "cover", "bubble": False}]}, self.d)

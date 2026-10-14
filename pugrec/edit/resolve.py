@@ -13,7 +13,9 @@ can't disagree. Pure: no video is decoded here. Layers:
   image  {img: <id in plan["images"]>, dst, opacity, pixelated, flip, rect (crop, image px), shape, radius}
          (logo, card icon, sweep sprite, backdrop image)
   star   {x, y, r, rot, color, opacity}               (a 4-point sparkle)
-Any layer may carry `clip: [x, y, w, h]` (output px): drawn only inside it (the sweep's reveal).
+Any layer may carry `clip: [x, y, w, h]` (output px): drawn only inside it (the sweep's reveal),
+and `bg: true`: a background (blur copy, colour, backdrop, shadow) - transitions cross-fade it,
+the spotlight and `move` never treat it as the view. Compositors ignore the flag.
 Title cards are frames with src "card:intro"/"card:outro" (no video, silence underneath).
 
 Times in a plan: output seconds for frames, *source* seconds in layers (`t`), so
@@ -606,7 +608,8 @@ class OutputResolver:
         layers = []
         split = scene["shot"]["kind"] == "split"
         if split:
-            layers.append({"type": "fill", "dst": [0, 0, self.W, self.H], "color": self.style["background"]})
+            layers.append({"type": "fill", "dst": [0, 0, self.W, self.H], "color": self.style["background"],
+                           "bg": True})
         radius = self.style["radius"] * self.unit if split else 0
         for ev, (shot, dst) in zip(self.evals_for(scene), self.panes_for(scene)):
             bw, bh = ev.bounds()
@@ -633,10 +636,10 @@ class OutputResolver:
                 if scene["background"] == "blur":
                     layers.append({"type": "video", "src": stream, "t": round(t, 4), "rect": rr(cover),
                                    "dst": rr(dst), "shape": shape, "radius": r1(radius),
-                                   "blur": r1(self.style["blur"] * self.unit), "dim": 0.35})
+                                   "blur": r1(self.style["blur"] * self.unit), "dim": 0.35, "bg": True})
                 else:
                     layers.append({"type": "fill", "dst": rr(dst), "color": scene["background"], "shape": shape,
-                                   "radius": r1(radius)})
+                                   "radius": r1(radius), "bg": True})
                 layers.append({"type": "video", "src": stream, "t": round(t, 4), "rect": rr(tgt), "dst": rr(inner),
                                "shape": "round", "radius": r1(self.style["radius"] * self.unit)})
                 if views_out is not None:
@@ -679,7 +682,7 @@ class OutputResolver:
         sp = scene["spotlight"]
         out = []
         for l in layers:
-            if l["type"] != "video" or not l["src"].endswith("/screen") or l.get("blur"):
+            if l["type"] != "video" or not l["src"].endswith("/screen") or l.get("blur") or l.get("bg"):
                 out.append(l)
                 continue
             rx, ry, rw, rh = l["rect"]
@@ -706,7 +709,7 @@ class OutputResolver:
         inner one, not the blurred background) - what a `move` glides from/to."""
         if scene["shot"]["kind"] == "split":
             return None
-        vids = [l for l in layers if l["type"] == "video" and not l.get("blur")]
+        vids = [l for l in layers if l["type"] == "video" and not l.get("blur") and not l.get("bg")]
         return dict(vids[-1]) if len(vids) == 1 else None
 
     # -- bubble ----------------------------------------------------------
@@ -823,15 +826,15 @@ class OutputResolver:
                 layers += [dict(l, clip=[0.0, 0.0, r1(min(edge, self.W)), float(self.H)]) for l in new]
             layers += self.sparkle_trail(scene["index"], raw) + sprite
         elif in_trans and self.trans["type"] == "move":
-            # The sharp view glides (source rect and output rect, so contain <-> cover works);
-            # blurred backgrounds cross-fade underneath it.
+            # The sharp view glides (source rect and output rect, so contain <-> cover <-> inset
+            # works); every background layer (blur, colour, backdrop, shadow) cross-fades under it.
             new = self.scene_layers(scene, t, dt, changed)
             fg = self.foreground_view(scene, new)
             for l in self.scene_layers(self.prev, t, dt, False):
-                if l.get("blur"):
+                if l.get("bg"):
                     layers.append(dict(l, opacity=round(l.get("opacity", 1.0) * (1 - u), 3)))
             for l in new:
-                if l.get("blur"):
+                if l.get("bg"):
                     layers.append(dict(l, opacity=round(l.get("opacity", 1.0) * u, 3)))
             a = self.move_from
             rect = lerp_rect(a["rect"], fg["rect"], u)
