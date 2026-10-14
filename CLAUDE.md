@@ -130,5 +130,17 @@ James's rule (2026-10-13): **commit little and often.**
 - Done 2026-10-14: `fit: inset` (cards on a backdrop) and `push` (slow push-in, James's pinned idea).
   Transitions, the bubble and push run on the output clock (frame count), never on source time:
   cuts inside a scene used to end fades early (a visible pop).
+- **Pinned (James, 2026-10-14): a native GPU build compositor**, replacing compose.py (kept as the
+  CPU fallback and for tests), reading the same plan. Why: builds are ~0.4x real time, limited by
+  moving 33 MB 5K frames between ffmpeg, Python and x264 (measured: ~50% waiting for decoded
+  frames, ~40% CPU compositing). Shape: VAAPI AV1 decode on the GPU's video chip -> frames into
+  OpenGL/Vulkan without copying (dmabuf) -> shaders draw the layers (same maths as player.js) ->
+  read back only the 1080p result -> x264. A fixed texture pool and a hard VRAM cap (~2 GB): the
+  desktop shares the GPU (see the GPU-experiment gotcha). Estimate 3-5x faster, several days.
+  Start with a small memory-watched prototype (10 s of 5K, one crop, fps + VRAM), James's OK first.
+  Ruled out (measured 2026-10-14): GPU decode alone in today's pipeline (11% slower), GPU
+  downscale (the 16% gain is the downscale itself, CPU does the same), more jobs (slower),
+  GPU H.264 encode (bigger files for little), headless Chrome as compositor (no HW AV1 decode,
+  20-45 ms readback per frame).
 - Next ideas: move transitions between contain views; overlays / other sources; key-shortcut
   captions from `key` events; title cards; VAAPI decode in builds; a keybind in the dotfiles.
