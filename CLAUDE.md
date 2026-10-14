@@ -53,8 +53,9 @@ James's rule (2026-10-13): **commit little and often.**
 - Conventional Commits (`feat(record): ...`, `fix(render): ...`, `docs: ...`), with a body that
   says **why**, not just what.
 - Author: James Woodall, GitHub noreply address (repo-local config, already set).
-- Remote: github.com/jamesikanos/pugrec - a fresh single-commit history (2026-10-13), **private**
-  until James makes it public. The earlier history lives in the private
+- Remote: github.com/jamesikanos/pugrec - **PUBLIC** since 2026-10-14 (history started fresh
+  2026-10-13). Everything pushed is visible to anyone: no secrets, no customer names, no
+  personal data, in files or commit messages. The earlier history lives in the private
   github.com/jamesikanos/pugscreenrecord and must never be pushed here (it names a customer).
   `main` for now; push after committing. Never force-push.
 - **No customer names anywhere** - files, tests, examples, commit messages. Examples use Acme.
