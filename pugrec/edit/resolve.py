@@ -623,12 +623,19 @@ class OutputResolver:
         room = inset_room(dst, ins["padding"])
         return room[2] / room[3]
 
+    def framed_shot(self, scene, shot):
+        """In an inset card a window *is* the card: no margin of desktop around it (the
+        default window padding), unless the edit sets one."""
+        if shot["kind"] == "window" and "padding" not in shot and self.pane_opts(scene, shot)[0] == "inset":
+            return dict(shot, padding=0.0)
+        return shot
+
     def evals_for(self, scene):
         key = scene["index"]
         if key not in self.evals:
             sess = self.sessions[scene["source"]]
-            self.evals[key] = [ShotEval(shot, sess, scene["at"], self.frame_aspect(scene, shot, dst),
-                                        lambda m, s=scene: self.warn(s, m))
+            self.evals[key] = [ShotEval(self.framed_shot(scene, shot), sess, scene["at"],
+                                        self.frame_aspect(scene, shot, dst), lambda m, s=scene: self.warn(s, m))
                                for shot, dst in self.panes_for(scene)]
         return self.evals[key]
 

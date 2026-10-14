@@ -328,6 +328,8 @@ class Inset(unittest.TestCase):
         self.assertGreaterEqual(y, pad - 0.5)
         self.assertLessEqual(y + h, 1080 - pad + 0.5)
         self.assertEqual([l for l in f["layers"] if l["type"] == "gradient"][0]["dst"], [0.0, 0.0, 1920.0, 1080.0])
+        # The window *is* the card: no margin of desktop around it (fake_session: left at 10,54 2540x2096).
+        self.assertEqual(card["rect"], [10.0, 54.0, 2540.0, 2096.0])
 
     def test_pane_fit_wins_over_the_scene_fit(self):
         p = plan(self.split(fit="cover"), self.d)
