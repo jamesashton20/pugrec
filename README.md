@@ -50,6 +50,11 @@ pinned SHA-256s.
   it's PodMic RAW (`~/.config/pugrec/config.toml`) and is cleaned up afterwards. A muted mic
   (main-pc's `hotmic`) is warned about, never unmuted.
 - **Webcam**: ffmpeg, MJPEG -> AV1 on the GPU, 1080p, synced by the kernel's frame timestamps.
+- **Webcam**: the real camera - the BRIO by name, else the first hardware camera; never a virtual
+  (v4l2loopback) one, even if that's the desktop's default (`camera = "<path or name>"` in
+  `~/.config/pugrec/config.toml` to choose). For the recording its zoom/pan/tilt are set wide and
+  centred (pugrec frames the face itself) and put back afterwards (`[camera_controls]` to change,
+  `camera_controls = false` to leave the camera alone).
 - **Cursor** and **windows** from Hyprland IPC.
 - **Mouse buttons and wheel** by default, read without root (the desktop lets your own session
   read the mouse), so there's no password prompt. **Keys** only with `--keys` (or `keys = true` in

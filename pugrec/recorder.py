@@ -109,14 +109,73 @@ def camera_holders(dev):
     return out
 
 
+CAMERA_NAME = "BRIO"  # the recording camera, by name (config: camera = "<path or name regex>")
+# The camera's own zoom/pan/tilt for a recording: wide and centred - pugrec frames the face itself.
+# Whatever was set before (e.g. a meeting setup) is put back when the recording ends.
+# config: [camera_controls] to change them, or camera_controls = false to leave the camera alone.
+CAMERA_CONTROLS = {"zoom_absolute": 100, "pan_absolute": 0, "tilt_absolute": 0}
+
+
+def _v4l_sys(dev):
+    return os.path.join("/sys/class/video4linux", os.path.basename(os.path.realpath(dev)))
+
+
+def camera_is_virtual(dev):
+    """A v4l2loopback (or other software) camera: no hardware under it in sysfs."""
+    return "/virtual/" in os.path.realpath(_v4l_sys(dev))
+
+
+def camera_name(dev):
+    try:
+        with open(os.path.join(_v4l_sys(dev), "name")) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
 def default_camera():
-    """First camera's capture node, by stable id (/dev/videoN numbers move around)."""
+    """The camera to record, by stable id (/dev/videoN numbers move around): the config's `camera`
+    (a path, or a regex on the device name), else the BRIO, else the first real camera - never a
+    virtual one (a v4l2loopback meeting camera may be the desktop's default: it's processed,
+    and it's not the camera)."""
+    import re
+    want = config().get("camera")
+    if want and os.path.exists(os.path.expanduser(want)):
+        return os.path.expanduser(want)
     d = "/dev/v4l/by-id"
     try:
-        nodes = sorted(n for n in os.listdir(d) if n.endswith("-video-index0"))
+        nodes = [os.path.join(d, n) for n in sorted(os.listdir(d)) if n.endswith("-video-index0")]
     except FileNotFoundError:
-        return None
-    return os.path.join(d, nodes[0]) if nodes else None
+        nodes = []
+    real = [n for n in nodes if not camera_is_virtual(n)]
+    pattern = re.compile(want or CAMERA_NAME, re.I)
+    named = [n for n in real if pattern.search(camera_name(n)) or pattern.search(os.path.basename(n))]
+    return (named or real or [None])[0]
+
+
+def v4l2_get(dev, names):
+    """{control: value} for the ones the device has (v4l2-ctl), {} if it can't be read."""
+    try:
+        out = subprocess.run(["v4l2-ctl", "-d", dev, f"--get-ctrl={','.join(names)}"],
+                             capture_output=True, text=True, timeout=3).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    vals = {}
+    for line in out.splitlines():
+        k, _, v = line.partition(":")
+        if k.strip() in names and v.strip().lstrip("-").isdigit():
+            vals[k.strip()] = int(v)
+    return vals
+
+
+def v4l2_set(dev, values):
+    if not values:
+        return True
+    try:
+        return subprocess.run(["v4l2-ctl", "-d", dev, "--set-ctrl=" + ",".join(f"{k}={v}" for k, v in values.items())],
+                              capture_output=True, timeout=3).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
 
 
 class Session:
@@ -385,6 +444,7 @@ class Session:
             self.notice("no camera found; recording without")
             self.cam_ready.set()
             return
+        self.set_camera_controls(dev)
         w, h = self.args.camera_size.lower().split("x")
         self.cam_file = os.path.join(self.dir, "camera.mkv")
         cmd = ["ffmpeg", "-nostdin", "-hide_banner", "-v", "info", "-y", "-vaapi_device", "/dev/dri/renderD128",
@@ -404,6 +464,7 @@ class Session:
                     msg = "camera is busy" + (f" - in use by {', '.join(who)}" if who else "") + "; recording without it"
                     self.notice(msg)
                     notify("Camera busy", msg[0].upper() + msg[1:], "critical")
+                    self.restore_camera_controls()  # someone else's camera (a meeting): hands off at once
                     seen = True  # one warning, and no "start:" line follows
                 m = None if seen else re.search(r"\bstart: ([0-9]+\.[0-9]+)", line)
                 if m:
@@ -416,7 +477,8 @@ class Session:
                     self.cam_first_t = self.t(first_mono)
                     self.emit({"type": "stream_start", "stream": "camera", "file": "camera.mkv",
                                "device": os.path.basename(dev), "pixels": [int(w), int(h)], "fps": 30,
-                               "codec": "av1", "first_frame_t": self.t(first_mono)}, first_mono)
+                               "codec": "av1", "first_frame_t": self.t(first_mono),
+                               "controls": getattr(self, "cam_controls", {})}, first_mono)
             self.cam_ready.set()  # ffmpeg ended before a frame: don't wait for it
             rc = self.cam.wait()
             if not self.stop.is_set():
@@ -560,6 +622,24 @@ class Session:
             self.overlay.kill()
             self.overlay.wait(2)
 
+    def set_camera_controls(self, dev):
+        """Wide and centred for the recording (the camera's zoom/pan/tilt may have been set for a
+        meeting); the previous values are kept to put back afterwards."""
+        self.cam_dev, self.cam_restore = dev, {}
+        want = config().get("camera_controls", CAMERA_CONTROLS)
+        if not want:
+            return
+        before = v4l2_get(dev, list(want))
+        change = {k: int(v) for k, v in want.items() if k in before and before[k] != int(v)}
+        if change and v4l2_set(dev, change):
+            self.cam_restore = {k: before[k] for k in change}
+        self.cam_controls = {k: int(want[k]) for k in want if k in before}
+
+    def restore_camera_controls(self):
+        restore, self.cam_restore = getattr(self, "cam_restore", {}), {}
+        if restore:
+            v4l2_set(self.cam_dev, restore)
+
     def trim_camera(self, end_ns):
         """ffmpeg reads the camera for a moment (~0.4 s) after its stop signal: cut camera.mkv
         at the stop, so it ends with the screen and the timeline. Stream copy (no re-encode;
@@ -619,6 +699,7 @@ class Session:
                 self.cam.wait(3)
             except subprocess.TimeoutExpired:
                 self.cam.kill()
+        self.restore_camera_controls()
         if self.helper and self.helper.poll() is None and not self.input_ready.is_set():
             self.helper.terminate()  # still pkexec, waiting for the password: ours to stop; the prompt goes
         self._stop_helper()
@@ -722,6 +803,7 @@ class Session:
                 p.kill()
                 p.wait(2)
                 self.notice(f"{name} hung on stop and was killed; {fname} may be incomplete")
+        self.restore_camera_controls()
         if not self.cancelled:
             self.trim_camera(end)
         try:

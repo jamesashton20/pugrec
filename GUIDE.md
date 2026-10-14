@@ -268,7 +268,7 @@ can't look at images, at least compare durations and audio levels.
 | `info` shows no duration | the recorder crashed or is still running (`pugrec stop`) |
 | Audio is silence (-91 dB) | the mic was muted while recording; nothing to recover, record again |
 | `key` count is 0 | recorded without `--keys` (the default), or James dismissed the password prompt (then only the mouse was captured) |
-| No camera stream | camera unplugged / busy; `notice` lines in `session.jsonl` say which |
+| No camera stream | camera unplugged / busy; `notice` lines in `session.jsonl` say which. Busy "in use by" a meeting/loopback camera program: that program holds the BRIO - pugrec records the real camera, never the loopback, so it has to let go of it (James's call) |
 | `preview`: address in use | another server on the port; pugrec moves to the next free port and prints it |
 | `transcript`: whisper-cli missing | `scripts/build-whisper.sh` (builds it in a distrobox; James's go-ahead first) |
 | `check`: "no window matches" | the selector matched nothing at that scene's start: use an `address` from the draft header |

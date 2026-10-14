@@ -230,6 +230,62 @@ class SetupModelTest(unittest.TestCase):
                     self.assertFalse(os.path.exists(dst) or os.path.exists(dst + ".part"))
 
 
+class CameraChoiceTest(unittest.TestCase):
+    """Always the real camera (the BRIO), never a v4l2loopback meeting camera, whatever the default."""
+
+    def pick(self, nodes, names, virtual, cfg=None):
+        from unittest import mock
+        by = lambda n: os.path.basename(n)  # noqa: E731
+        with mock.patch("os.listdir", return_value=nodes), \
+                mock.patch.object(recorder, "camera_is_virtual", lambda n: by(n) in virtual), \
+                mock.patch.object(recorder, "camera_name", lambda n: names[by(n)]), \
+                mock.patch.object(recorder, "config", return_value=cfg or {}):
+            got = recorder.default_camera()
+        return got and by(got)
+
+    NODES = ["platform-v4l2loopback-0-video-index0", "usb-046d_Logitech_BRIO_X-video-index0",
+             "usb-046d_Logitech_BRIO_X-video-index1", "usb-0c45_Other_Cam-video-index0"]
+    NAMES = {"platform-v4l2loopback-0-video-index0": "PugCam", "usb-046d_Logitech_BRIO_X-video-index0": "Logitech BRIO",
+             "usb-0c45_Other_Cam-video-index0": "Other Cam"}
+
+    def test_brio_even_when_the_loopback_sorts_first(self):
+        self.assertEqual(self.pick(self.NODES, self.NAMES, {"platform-v4l2loopback-0-video-index0"}),
+                         "usb-046d_Logitech_BRIO_X-video-index0")
+
+    def test_never_a_virtual_camera(self):
+        nodes = ["platform-v4l2loopback-0-video-index0", "usb-0c45_Other_Cam-video-index0"]
+        self.assertEqual(self.pick(nodes, self.NAMES, {"platform-v4l2loopback-0-video-index0"}),
+                         "usb-0c45_Other_Cam-video-index0")
+        self.assertIsNone(self.pick(nodes[:1], self.NAMES, {"platform-v4l2loopback-0-video-index0"}))
+
+    def test_config_name_wins(self):
+        self.assertEqual(self.pick(self.NODES, self.NAMES, set(), {"camera": "other"}), "usb-0c45_Other_Cam-video-index0")
+
+
+class CameraControlsTest(unittest.TestCase):
+    def session(self, before, cfg=None):
+        from unittest import mock
+        s = recorder.Session.__new__(recorder.Session)
+        sets = []
+        with mock.patch.object(recorder, "v4l2_get", lambda dev, names: {k: v for k, v in before.items() if k in names}), \
+                mock.patch.object(recorder, "v4l2_set", lambda dev, vals: sets.append(dict(vals)) or True), \
+                mock.patch.object(recorder, "config", return_value=cfg or {}):
+            s.set_camera_controls("/dev/video0")
+            s.restore_camera_controls()
+        return sets
+
+    def test_wide_and_centred_then_put_back(self):
+        sets = self.session({"zoom_absolute": 180, "pan_absolute": 3600, "tilt_absolute": 0})
+        self.assertEqual(sets[0], {"zoom_absolute": 100, "pan_absolute": 0})       # only what differs
+        self.assertEqual(sets[1], {"zoom_absolute": 180, "pan_absolute": 3600})    # the meeting setup, restored
+
+    def test_already_right_nothing_touched(self):
+        self.assertEqual(self.session({"zoom_absolute": 100, "pan_absolute": 0, "tilt_absolute": 0}), [])
+
+    def test_config_can_leave_the_camera_alone(self):
+        self.assertEqual(self.session({"zoom_absolute": 180}, {"camera_controls": False}), [])
+
+
 class KeysOptInTest(unittest.TestCase):
     """Keys need a password, so they're opt-in: --keys, or `keys = true` in config.toml."""
     def want(self, flag, cfg):
