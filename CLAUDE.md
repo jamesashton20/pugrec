@@ -31,7 +31,13 @@ tests/                 unittest; fake_session.py makes a synthetic 5K session
 - **Recorder + format first**, then the editor as a **scene script** + browser preview, not a GUI
   timeline editor (James: making an editor is complex; the goal is for the scripting to be good).
 - **One evaluator, two dumb compositors**: resolve.py decides everything; compose.py and
-  web/player.js only draw layers. Never put framing logic in a compositor.
+  web/player.js only draw layers. Never put framing logic in a compositor. A new layer type
+  goes into both compositors with the same maths (gradient = CSS angles, shadow sigma =
+  blur/2 = canvas shadowBlur). Background layers carry `bg: true` (transitions cross-fade them;
+  spotlight and `move` skip them) - compositors ignore the flag.
+- **New looks are options, not new defaults** (James, 2026-10-14, about `fit: inset`): adding
+  one must leave every existing edit resolving to the same plan and must not change what `auto`
+  or `draft` pick. Check by resolving all of ~/Videos/PugRec before and after.
 - **Script times are source seconds**; 16:9 + 9:16 from one script; sources / timeline segments /
   overlays are in the schema so splicing and picture-in-picture need no compositor changes later.
 - **Transcription on the GPU**: whisper.cpp Vulkan (AMD), built in a distrobox.

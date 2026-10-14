@@ -174,6 +174,8 @@ Rules that matter:
   as fractions of the window), `{cursor: {zoom}}`, `{rect: [...]}`, `{split: [A, B], ratio}`.
   Window selectors: `{address: "0x..."}` (exact - prefer it), `{class: regex}`, `{title: regex}`,
   `focused`.
+- **Fit:** `auto` (default - leave it unless there's a reason), `cover`, `contain`, and `inset`
+  (the picture as a rounded card on a backdrop; on a scene or on one split pane).
 - **Transitions:** `cut`, `{move: s}` (the camera glides; needs one view on both sides, not a
   split, not screen <-> camera), `{fade: s}`.
 - **The bubble** (webcam circle) settings stick until changed; it hides itself on camera shots.
@@ -190,6 +192,17 @@ Rules that matter:
   clicks. `camera` for the intro/outro, `window` when talking about an app, `cursor` around
   clicks (start ~0.5 s before the first click), `split` (window + camera) while waiting for
   something on screen and talking about it.
+- *Presenter / card-on-a-stage look* - an option, not a default; use it when James asks for that
+  look ("like a YouTuber", "polished", "the camera in a card", "the app floating on a background")
+  or it clearly suits the purpose, and keep everything else as you would anyway:
+  - talking head beside the app: `split: [{window: SEL}, {camera: {}, fit: inset, inset: {aspect:
+    "2:3"}}]` with `ratio: ~0.66`;
+  - the app floating on the backdrop: `fit: inset` on a window scene (the window becomes the card);
+  - intro/outro as a camera card: `shot: camera, fit: inset` (a `move` from a full-frame camera
+    lifts it in).
+  The backdrop comes from the theme (`style.backdrop`); without one it's the PugPal gradient. Keep
+  `shadow` at 0 unless the theme or James wants one. Look at a built frame: the card should have
+  even room around it and nothing important cut off.
 - *Vertical output:* give it tighter shots via `vertical:` overrides (cursor zoom 1.2-1.4).
 - *For a customer / brand:* `style: {theme: <name>}` (`pugrec themes` lists them; an unknown name
   is an error listing the installed ones), plus `intro: {title, subtitle}` / `outro:` title cards
@@ -335,8 +348,9 @@ Each scene lasts until the next scene's `at`.
 | --- | --- |
 | `at` | source seconds where it starts |
 | `shot` | what to show (below) |
-| `fit` | `auto` (default) / `cover` / `contain` (below) |
-| `background` | for `contain`: `blur` (default) or a colour `"#16171a"` |
+| `fit` | `auto` (default) / `cover` / `contain` / `inset` (below) |
+| `background` | behind a `contain` view or an `inset` card: `blur` (contain's default), `backdrop` (inset's default: the style's backdrop) or a colour `"#16171a"` |
+| `inset` | for `fit: inset`: `{padding, radius, aspect, position, shadow}` over `style.inset` (below) |
 | `transition` | into this scene: `cut`, `{move: s}`, `{fade: s}` (default `{move: 0.6}`) |
 | `bubble` | camera bubble: `{corner, size, margin, shape, show}`, `false` to hide, `true` to show. **Sticky**: applies until a later scene changes it |
 | `spotlight` | `false` / `true` / `{window, blur, dim}` for this scene only (default: the style's) |
@@ -353,7 +367,7 @@ Each scene lasts until the next scene's `at`.
 | `{window: SEL, follow: true, region: [x, y, w, h], padding: 0.04}` | a window. `follow` (default true) tracks it as it moves/resizes; `follow: false` freezes it where it was when the scene started. `region` = part of the window, fractions of its size. |
 | `{cursor: {zoom: 2, dead_zone: 0.2}}` | follows the mouse; the view only moves when the cursor leaves the middle `1 - 2*dead_zone` |
 | `{rect: [x, y, w, h]}` | a fixed screen area, pixels - or fractions of the screen if all values <= 1 |
-| `{split: [SHOT, SHOT], ratio: 0.5, layout: auto}` | two panes; `auto` = side by side on wide outputs, stacked on tall ones (`row`/`column` to force) |
+| `{split: [SHOT, SHOT], ratio: 0.5, layout: auto}` | two panes; `auto` = side by side on wide outputs, stacked on tall ones (`row`/`column` to force). A pane may carry its own `fit`, `inset` and `background` next to its shot (`{camera: {}, fit: inset}`); they win over the scene's |
 
 **Window selectors** (`SEL`): `{class: regex}`, `{title: regex}`, both, `{address: "0x..."}` (exact; the draft
 and `session.jsonl` list them), or `focused` / `{focused: true}` (whatever has focus, switching with it).
@@ -368,6 +382,41 @@ Every shot has a target rectangle; the output (or split pane) has its own aspect
   behind it (or a colour: `background: "#16171a"`).
 - `auto` (default): `cover` unless that would cut off more than 15% of the target, then `contain`.
   On a 5120x2160 screen, a 16:9 output of the whole screen is `contain`; on 9:16, most windows are.
+- `inset`: the picture as a **rounded card with room around it, on a backdrop** (next section).
+  Only when a scene or pane asks for it; `auto` never picks it.
+
+#### Inset: a card on a backdrop
+
+One more way to frame a shot - the "presenter" look of keynotes, Screen Studio and many YouTube
+videos: the picture doesn't fill its pane, it sits as a card on a designed background. Use it
+when an edit wants that look; it isn't a default and doesn't replace cover/contain/split.
+
+```yaml
+scenes:
+  - at: 11.3                       # the app on the left, you as a portrait card on the right
+    shot:
+      split:
+        - {window: {class: google-chrome}}
+        - {camera: {}, fit: inset, inset: {aspect: "2:3", position: [0.5, 0.4]}}
+      ratio: 0.66
+  - at: 34.4                       # the whole app floating on the backdrop
+    shot: {window: {class: google-chrome}}
+    fit: inset
+  - at: 60
+    shot: camera                   # a camera card; with `transition: {move: s}` from a full-frame
+    fit: inset                     # camera it lifts into the card while the backdrop fades in
+```
+- `inset` keys (scene, pane, or `style.inset` for the defaults): `padding` (room around the card,
+  fraction of the pane's shorter side, 0.06), `radius` (corners, px at 1080p, 18), `aspect`,
+  `position` ([x, y], where the card sits in the free room: 0 = left/top, 1 = right/bottom; [0.5, 0.5]),
+  `shadow` (0 = none, the PugPal default .. 1 = strong).
+- `aspect: auto` (default): the camera fills the room (face-centred); a window, cursor, rect or screen
+  card takes the target's own shape, whole - a window *is* the card (no margin of desktop around it).
+- `aspect: "2:3"` (or a number): the card has that shape and the view is cropped to it (the camera
+  centred on the face for it). A portrait card beside the app is usually `"2:3"` or `"3:4"`.
+- Behind the card: the style's `backdrop` (default), or `background: blur` / `"#rrggbb"`.
+  `background: backdrop` also works for `fit: contain`.
+- In a split only that pane is a card; the other pane is drawn as usual.
 
 #### Spotlight: one window sharp, the rest of the screen blurred
 
@@ -433,6 +482,11 @@ style:
   radius: 6                  # px at 1080p, rounded panes
   gap: 0.02                  # split gap
   padding: 0.04              # around a framed window
+  backdrop:                  # behind inset cards (and `background: backdrop`)
+    {gradient: ["#16171a", "#32231f", "#e8480f"],   # 2-4 colours: PugPal ink -> Jesse's mask -> FieldPal orange
+     angle: 160,             # CSS degrees: 0 = towards the top, 90 = right, 180 = down
+     image: null}            # or an image (PNG/JPEG/WebP, cover-cropped); setting one replaces the other
+  inset: {padding: 0.06, radius: 18, aspect: auto, position: [0.5, 0.5], shadow: 0}   # fit: inset defaults
   transition: {move: 0.6}    # default transition
 ```
 The bubble hides automatically when the shot itself shows the camera. Captions appear when the
@@ -447,7 +501,8 @@ names for the transcript, used by `pugrec transcript --theme NAME`; and default 
 cards), validated exactly like `style`. `style: {theme: acme}` loads `~/.config/pugrec/themes/acme.yaml` (or `theme: some/path.yaml`,
 relative to edit.yaml). Order: pugrec's defaults (the PugPal look) <- the theme <- edit.yaml's own
 `style` keys, key by key (`captions: {color: ...}` in edit.yaml changes only the colour). An unknown
-theme is an error listing the installed ones.
+theme is an error listing the installed ones. A brand's `backdrop:` (its gradient, or a stage image
+next to the theme file) belongs in its theme, so every inset card in that brand's edits matches.
 ```bash
 pugrec themes                # the installed themes and their descriptions
 pugrec themes --defaults     # the PugPal look as a complete theme file (a starting point)
