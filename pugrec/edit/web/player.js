@@ -101,6 +101,35 @@ function drawFill(l) {
   ctx.restore();
 }
 
+function drawGradient(l) {
+  // CSS-style angle (0 = towards the top, 90 = right); the line runs through the centre and
+  // just reaches the corners - the same maths as compose.gradient_t.
+  const [x, y, w, h] = l.dst;
+  const a = ((l.angle ?? 180) * Math.PI) / 180, dx = Math.sin(a), dy = -Math.cos(a);
+  const half = (Math.abs(w * dx) + Math.abs(h * dy)) / 2 || 1;
+  const cx = x + w / 2, cy = y + h / 2;
+  const g = ctx.createLinearGradient(cx - dx * half, cy - dy * half, cx + dx * half, cy + dy * half);
+  l.colors.forEach((c, i) => g.addColorStop(l.colors.length > 1 ? i / (l.colors.length - 1) : 0, c));
+  ctx.save();
+  ctx.globalAlpha = l.opacity ?? 1;
+  shapePath(x, y, w, h, l.shape, l.radius || 0);
+  ctx.fillStyle = g; ctx.fill();
+  ctx.restore();
+}
+
+function drawShadow(l) {
+  // Only the shadow: the shape is filled far off-canvas and its shadow offset back into place
+  // (shadowBlur = 2 sigma, like compose.draw_shadow's Gaussian).
+  const [x, y, w, h] = l.dst, far = 100000;
+  ctx.save();
+  ctx.shadowColor = `rgba(0, 0, 0, ${l.opacity ?? 0.3})`;
+  ctx.shadowBlur = l.blur ?? 20;
+  ctx.shadowOffsetX = far; ctx.shadowOffsetY = l.offset || 0;
+  shapePath(x - far, y, w, h, "round", l.radius || 0);
+  ctx.fillStyle = "#000"; ctx.fill();
+  ctx.restore();
+}
+
 function drawRing(l) {
   ctx.save();
   ctx.globalAlpha = l.opacity ?? 1;
@@ -142,8 +171,10 @@ function drawImage(l) {
   ctx.save();
   ctx.globalAlpha = l.opacity ?? 1;
   ctx.imageSmoothingEnabled = !l.pixelated;   // pixel art: nearest-neighbour, like the build
-  if (l.flip) { ctx.translate(x + w, y); ctx.scale(-1, 1); ctx.drawImage(im, 0, 0, w, h); }
-  else ctx.drawImage(im, x, y, w, h);
+  if (l.shape && l.shape !== "rect" || l.radius) { shapePath(x, y, w, h, l.shape, l.radius || 0); ctx.clip(); }
+  const [sx, sy, sw, sh] = l.rect || [0, 0, im.naturalWidth, im.naturalHeight];   // rect: a cover crop
+  if (l.flip) { ctx.translate(x + w, y); ctx.scale(-1, 1); ctx.drawImage(im, sx, sy, sw, sh, 0, 0, w, h); }
+  else ctx.drawImage(im, sx, sy, sw, sh, x, y, w, h);
   ctx.restore();
 }
 
@@ -172,6 +203,8 @@ function draw(frame) {
     }
     if (l.type === "video") drawVideo(l);
     else if (l.type === "fill") drawFill(l);
+    else if (l.type === "gradient") drawGradient(l);
+    else if (l.type === "shadow") drawShadow(l);
     else if (l.type === "ring") drawRing(l);
     else if (l.type === "text") drawText(l);
     else if (l.type === "image") drawImage(l);

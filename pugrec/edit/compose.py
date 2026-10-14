@@ -173,6 +173,69 @@ def draw_fill(canvas, l):
     blit(canvas, solid(w, h, l["color"]), x, y, a, l.get("opacity", 1.0))
 
 
+_gradients = {}
+
+
+def gradient_t(w, h, angle):
+    """Position 0..1 along a CSS-style linear gradient (0 deg = towards the top, 90 = right),
+    whose line runs through the centre and just reaches the corners - the same maths as the
+    preview's createLinearGradient."""
+    a = math.radians(angle)
+    dx, dy = math.sin(a), -math.cos(a)
+    half = (abs(w * dx) + abs(h * dy)) / 2 or 1.0
+    xs = np.arange(w, dtype=np.float32) + 0.5 - w / 2
+    ys = np.arange(h, dtype=np.float32)[:, None] + 0.5 - h / 2
+    return np.clip((xs * dx + ys * dy) / (2 * half) + 0.5, 0, 1)
+
+
+def gradient(w, h, colors, angle):
+    key = (w, h, tuple(colors), round(angle, 2))
+    g = _gradients.get(key)
+    if g is None:
+        t = gradient_t(w, h, angle)
+        stops = np.linspace(0, 1, len(colors))
+        cols = np.stack([hex_bgr(c) for c in colors])  # (n, 3) BGR
+        g = np.stack([np.interp(t, stops, cols[:, i]) for i in range(3)], axis=-1)
+        g = np.clip(g + 0.5, 0, 255).astype(np.uint8)
+        _gradients[key] = g
+        if len(_gradients) > 8:
+            _gradients.pop(next(iter(_gradients)))
+    return g
+
+
+def draw_gradient(canvas, l):
+    dx, dy, dw, dh = l["dst"]
+    x, y = int(round(dx)), int(round(dy))
+    w, h = max(1, int(round(dw))), max(1, int(round(dh)))
+    shape = l.get("shape", "rect")
+    a = None if shape == "rect" and not l.get("radius") else mask(w, h, shape, l.get("radius", 0))
+    blit(canvas, gradient(w, h, l["colors"], l.get("angle", 180)), x, y, a, l.get("opacity", 1.0))
+
+
+_shadows = {}
+
+
+def draw_shadow(canvas, l):
+    """A soft black shadow of a rounded rect: Gaussian sigma = blur / 2 (as canvas shadowBlur),
+    moved down by `offset` px. Only the shadow is drawn; the card goes on top of it."""
+    dx, dy, dw, dh = l["dst"]
+    blur, off = l.get("blur", 20.0), l.get("offset", 0.0)
+    sigma = max(0.5, blur / 2)
+    m = int(math.ceil(3 * sigma))
+    w, h = max(1, int(round(dw))), max(1, int(round(dh)))
+    key = (w, h, int(l.get("radius", 0)), round(sigma, 1))
+    a = _shadows.get(key)
+    if a is None:
+        a = np.zeros((h + 2 * m, w + 2 * m, 1), np.float32)
+        a[m:m + h, m:m + w] = mask(w, h, "round", l.get("radius", 0))
+        a = cv2.GaussianBlur(a, (0, 0), sigma)[..., None]
+        _shadows[key] = a
+        if len(_shadows) > 16:
+            _shadows.pop(next(iter(_shadows)))
+    x, y = int(round(dx)) - m, int(round(dy + off)) - m
+    blit(canvas, solid(a.shape[1], a.shape[0], "#000000"), x, y, a, l.get("opacity", 0.3))
+
+
 def draw_ring(canvas, l):
     """Only the ring's own square is touched (a full-frame copy per ring was wasteful)."""
     H, W = canvas.shape[:2]
@@ -225,15 +288,19 @@ def _font(size, family="IBM Plex Sans", weight=600):
 _images = {}
 
 
-def image_bgra(path, w, h, pixelated=False, flip=False):
+def image_bgra(path, w, h, pixelated=False, flip=False, rect=None):
     """(BGR uint8, alpha (h, w, 1)) of an image file scaled to w x h (cached). pixelated =
-    nearest-neighbour (pixel art stays crisp); flip = mirrored left-right."""
-    key = (path, w, h, pixelated, flip)
+    nearest-neighbour (pixel art stays crisp); flip = mirrored left-right; rect = the part of
+    the image to use (image px), e.g. a backdrop's cover crop."""
+    key = (path, w, h, pixelated, flip, tuple(rect) if rect else None)
     hit = _images.get(key)
     if hit is None:
         from PIL import Image
         with Image.open(path) as im:
             im = im.convert("RGBA")
+            if rect:
+                sx, sy, sw, sh = rect
+                im = im.crop((int(round(sx)), int(round(sy)), int(round(sx + sw)), int(round(sy + sh))))
             if flip:
                 im = im.transpose(Image.FLIP_LEFT_RIGHT)
             a = np.asarray(im.resize((w, h), Image.NEAREST if pixelated else Image.LANCZOS), np.uint8)
@@ -247,7 +314,11 @@ def image_bgra(path, w, h, pixelated=False, flip=False):
 def draw_image(canvas, l, images):
     dx, dy, dw, dh = l["dst"]
     w, h = max(1, int(round(dw))), max(1, int(round(dh)))
-    bgr, alpha = image_bgra(images[l["img"]]["file"], w, h, l.get("pixelated", False), l.get("flip", False))
+    bgr, alpha = image_bgra(images[l["img"]]["file"], w, h, l.get("pixelated", False), l.get("flip", False),
+                            l.get("rect"))
+    shape = l.get("shape", "rect")
+    if shape != "rect" or l.get("radius"):
+        alpha = alpha * mask(w, h, shape, l.get("radius", 0))
     blit(canvas, bgr, int(round(dx)), int(round(dy)), alpha, l.get("opacity", 1.0))
 
 
@@ -350,6 +421,10 @@ def paint(canvas, layers, frames, images=None):
                 draw_video(canvas, f, l)
         elif l["type"] == "fill":
             draw_fill(canvas, l)
+        elif l["type"] == "gradient":
+            draw_gradient(canvas, l)
+        elif l["type"] == "shadow":
+            draw_shadow(canvas, l)
         elif l["type"] == "ring":
             draw_ring(canvas, l)
         elif l["type"] == "text":

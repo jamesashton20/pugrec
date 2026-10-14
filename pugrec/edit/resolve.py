@@ -6,9 +6,12 @@ can't disagree. Pure: no video is decoded here. Layers:
   video  {src: "main/screen", t: <source s>, rect: [x,y,w,h] source px,
           dst: [x,y,w,h] output px, shape: rect|round|circle, radius, blur, dim, opacity, border}
   fill   {dst, color, shape, radius, opacity}
+  gradient {dst, colors: [2-4], angle (CSS deg: 0 up, 90 right), shape, radius, opacity}   (backdrop)
+  shadow {dst, radius, blur (= 2 sigma, canvas shadowBlur), offset (px down), opacity}  (under a card)
   ring   {x, y, r, width, color, opacity}            (click highlight)
   text   {x, y (centre), size, words: [{w, hi}], color, hi, bg, bg_opacity, font, weight, pad, radius, opacity}
-  image  {img: <id in plan["images"]>, dst, opacity, pixelated, flip} (logo, card icon, sweep sprite)
+  image  {img: <id in plan["images"]>, dst, opacity, pixelated, flip, rect (crop, image px), shape, radius}
+         (logo, card icon, sweep sprite, backdrop image)
   star   {x, y, r, rot, color, opacity}               (a 4-point sparkle)
 Any layer may carry `clip: [x, y, w, h]` (output px): drawn only inside it (the sweep's reveal).
 Title cards are frames with src "card:intro"/"card:outro" (no video, silence underneath).
