@@ -32,6 +32,46 @@ function frameAt(t) {
   return p.frames[i];
 }
 
+// ---- audio: no clicks at cuts ----------------------------------------------------
+// A jump of the <audio> element mid-waveform clicks (the build fades 10 ms at every splice).
+// So the audio goes through a gain node: down over ~12 ms, jump, back up once it has seeked.
+// The AudioContext needs a user gesture, so it's made on Play; before that, plain jumps.
+let actx = null;
+const RAMP = 0.012;
+function audioOn() {
+  try {
+    if (!actx) actx = new AudioContext();
+    if (actx.state === "suspended") actx.resume();
+  } catch (e) { actx = null; }
+}
+function gainFor(m) {
+  if (!m._gain) {
+    const src = actx.createMediaElementSource(m);
+    m._gain = actx.createGain();
+    src.connect(m._gain).connect(actx.destination);
+  }
+  return m._gain;
+}
+function jumpAudio(m, t) {
+  if (!actx || m.tagName !== "AUDIO") { m.currentTime = t; return; }
+  if (m._jumping) return;
+  m._jumping = true;
+  const g = gainFor(m).gain, now = actx.currentTime;
+  g.cancelScheduledValues(now);
+  g.setValueAtTime(g.value, now);
+  g.linearRampToValueAtTime(0, now + RAMP);
+  setTimeout(() => {
+    m.addEventListener("seeked", () => {
+      const n = actx.currentTime;
+      g.cancelScheduledValues(n);
+      g.setValueAtTime(0, n);
+      g.linearRampToValueAtTime(1, n + RAMP);
+      m._jumping = false;
+    }, { once: true });
+    m.currentTime = t + RAMP;   // where the plan will be by the time the fade-down is done
+  }, RAMP * 1000 + 2);
+}
+
 // ---- syncing media to the plan's source times --------------------------------
 function sync(frame) {
   const p = state.plan;
@@ -47,7 +87,8 @@ function sync(frame) {
     const t = want.get(url);
     const drift = Math.abs(m.currentTime - t);
     if (state.playing) {
-      if (drift > 0.25) m.currentTime = t;   // cut, splice or drift: jump
+      if (m._jumping) continue;              // a click-free jump is under way
+      if (drift > 0.25) jumpAudio(m, t);     // cut, splice or drift: jump (audio: faded)
       if (m.paused) m.play().catch(() => {});
     } else {
       if (!m.paused) m.pause();
@@ -229,6 +270,7 @@ function tick(ts) {
 
 function setPlaying(on) {
   state.playing = on && !!state.plan;
+  if (state.playing) audioOn();   // Play is a user gesture: the only time an AudioContext may start
   if (state.playing && state.t >= state.plan.duration - 0.05) state.t = 0;
   $("play").textContent = state.playing ? "❚❚" : "▶";
 }
