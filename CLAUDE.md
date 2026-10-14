@@ -75,6 +75,15 @@ James's rule (2026-10-13): **commit little and often.**
   `"LOCK" in monitor.solitaryBlockedBy` (hypr.monitor_state `locked`).
 - The dev machine is James's daily driver: no sudo, no system changes. Recording tests
   write into a temp dir; use `--no-input` when James isn't there to answer the polkit prompt.
+- **GPU experiments can crash James's desktop - don't run them unasked.** 2026-10-14: a headless
+  Chrome test (WebCodecs + WebGL, 1200 x 5K frames uploaded as textures) ran the RX 9070 XT out of
+  memory (`amdgpu: Not enough memory for command submission`, `Failed to pin framebuffer -12`):
+  every app's GPU context died, Hyprland segfaulted, the session was lost and he had to reboot.
+  The desktop shares this GPU. Any GPU-heavy test (many 5K textures, parallel VAAPI streams,
+  shaders) needs his OK first, a small size first, and a watch on VRAM
+  (`/sys/class/drm/card*/device/mem_info_vram_used`) with a stop well before it's full.
+  Result of that experiment, for the record: no hardware AV1 decode in headless Chrome, and
+  reading 1080p frames back costs 20-45 ms each - not worth it as a build compositor.
 - Build speed ~0.35x realtime with 4 jobs (5K decode + x264 share the CPU). A float32 canvas was
   the first bottleneck (48 ms/frame): keep compositing uint8 + OpenCV.
 - Chunked builds: Matroska doesn't store the last frame's duration, so concat parts carry an
