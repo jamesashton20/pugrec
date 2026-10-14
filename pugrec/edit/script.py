@@ -10,7 +10,8 @@ import difflib
 import os
 
 CORNERS = ("top-left", "top-right", "bottom-left", "bottom-right")
-FITS = ("auto", "cover", "contain")
+FITS = ("auto", "cover", "contain", "inset")
+BACKGROUNDS = "blur, backdrop or a colour like '#16171a'"
 SHOT_KINDS = ("screen", "camera", "auto", "window", "cursor", "rect", "split")
 DEFAULT_STYLE = {  # = the PugPal look; a theme (style.theme) or edit.yaml's style overrides any of it
     "theme": None,                     # name in ~/.config/pugrec/themes/, or a path to a .yaml
@@ -33,6 +34,16 @@ DEFAULT_STYLE = {  # = the PugPal look; a theme (style.theme) or edit.yaml's sty
     "radius": 6,                       # px at 1080p: rounded panes (PugPal look)
     "gap": 0.02,                       # split gap, fraction of the output's shorter side
     "padding": 0.04,                   # space around a framed window, fraction of the window
+    # fit: inset - the picture as a rounded card with room around it, on the backdrop. Only used
+    # by scenes/panes that ask for it (fit: inset / background: backdrop); nothing else changes.
+    "backdrop": {"gradient": ["#16171a", "#32231f", "#e8480f"],   # ink -> Jesse's mask -> FieldPal orange
+                 "angle": 160,         # CSS degrees: 0 = towards the top, 90 = right, 180 = down
+                 "image": None},       # or an image (cover-cropped); setting one clears the other
+    "inset": {"padding": 0.06,         # room around the card, fraction of the pane's shorter side
+              "radius": 18,            # card corners, px at 1080p
+              "aspect": "auto",        # auto (camera: fill the room; others: the target's shape) or "W:H"
+              "position": [0.5, 0.5],  # where the card sits in the free space (0 = left/top)
+              "shadow": 0},            # 0 = none (the PugPal look) .. 1 = strong
     # One window sharp, the rest of the screen blurred + dimmed: {window: SEL, blur, dim}. Off by default.
     "spotlight": None,
     "transition": {"move": 0.6},       # default between scenes
@@ -165,7 +176,24 @@ def shot(v, path):
         panes = v["split"]
         if not isinstance(panes, list) or len(panes) != 2:
             _err(p, "expected exactly two shots: split: [a, b]")
-        inner = [shot(s, f"{p}[{i}]") for i, s in enumerate(panes)]
+        inner = []
+        for i, s in enumerate(panes):
+            pp = f"{p}[{i}]"
+            opts = {}
+            if isinstance(s, dict) and any(k in s for k in PANE_KEYS):
+                s = dict(s)
+                opts = {k: s.pop(k) for k in PANE_KEYS if k in s}
+            sh = shot(s, pp)
+            if "fit" in opts:
+                if opts["fit"] not in FITS:
+                    _err(f"{pp}.fit", f"expected one of {', '.join(FITS)}, got {opts['fit']!r}")
+                sh["fit"] = opts["fit"]
+            if "background" in opts:
+                sh["background"] = _background(opts["background"], f"{pp}.background")
+            if "inset" in opts:
+                inset(opts["inset"], f"{pp}.inset", DEFAULT_STYLE["inset"])  # validate now
+                sh["inset_raw"] = opts["inset"]
+            inner.append(sh)
         if any(s["kind"] == "split" for s in inner):
             _err(p, "a split can't contain another split")
         layout = v.get("layout", "auto")
@@ -222,7 +250,7 @@ def bubble(v, path, base):
     return out
 
 
-SCENE_KEYS = ["at", "source", "shot", "fit", "background", "transition", "bubble", "spotlight", "label"]
+SCENE_KEYS = ["at", "source", "shot", "fit", "background", "inset", "transition", "bubble", "spotlight", "label"]
 
 
 def spotlight(v, path, base):
@@ -254,10 +282,10 @@ def _scene(v, path, out_names, style, sources):
     if fit not in FITS:
         _err(f"{path}.fit", f"expected one of {', '.join(FITS)}, got {fit!r}")
     sc["fit"] = fit
-    bg = v.get("background", "blur")
-    if not (bg == "blur" or (isinstance(bg, str) and bg.startswith("#") and len(bg) == 7)):
-        _err(f"{path}.background", f"blur or a colour like '#16171a', got {bg!r}")
-    sc["background"] = bg
+    sc["background"] = _background(v["background"], f"{path}.background") if "background" in v else None
+    sc["inset_raw"] = v.get("inset")
+    if sc["inset_raw"] is not None:
+        inset(sc["inset_raw"], f"{path}.inset", DEFAULT_STYLE["inset"])  # validate now
     sc["transition"] = transition(v["transition"], f"{path}.transition") if "transition" in v \
         else transition(style["transition"], "style.transition")
     sc["bubble_raw"] = v.get("bubble")
@@ -286,7 +314,7 @@ def scene_for_output(sc, output, style, path, bubble_base=None):
                 _err(f"{path}.{output}.fit", f"expected one of {', '.join(FITS)}")
             s["fit"] = ov["fit"]
         if "background" in ov:
-            s["background"] = ov["background"]
+            s["background"] = _background(ov["background"], f"{path}.{output}.background")
         if "transition" in ov:
             s["transition"] = transition(ov["transition"], f"{path}.{output}.transition")
         if "label" in ov:
@@ -294,6 +322,16 @@ def scene_for_output(sc, output, style, path, bubble_base=None):
     # Spotlight: per scene (not sticky) - the scene's value, else the style's.
     sp = ov["spotlight"] if ov and "spotlight" in ov else sc.get("spotlight_raw", "style")
     s["spotlight"] = style["spotlight"] if sp == "style" else spotlight(sp, f"{path}.spotlight", style["spotlight"])
+    # Inset: the style's <- the scene's <- a pane's own.
+    ins_raw = ov["inset"] if ov and "inset" in ov else sc.get("inset_raw")
+    s["inset"] = inset(ins_raw, f"{path}.inset", style["inset"])
+    if s["shot"]["kind"] == "split":
+        panes = []
+        for i, pane in enumerate(s["shot"]["panes"]):
+            pane = dict(pane)
+            pane["inset"] = inset(pane.get("inset_raw"), f"{path}.shot.split[{i}].inset", s["inset"])
+            panes.append(pane)
+        s["shot"] = dict(s["shot"], panes=panes)
     raw = ov["bubble"] if ov and "bubble" in ov else sc["bubble_raw"]
     s["bubble"] = bubble(raw, f"{path}.bubble", bubble_base or style["bubble"])
     return s
@@ -538,6 +576,71 @@ def sparkle_style(v, path, base, base_dir="."):
     return out
 
 
+def backdrop_style(v, path, base, base_dir="."):
+    """{gradient: [2-4 colours], angle} or {image: file}; one replaces the other."""
+    _keys(v, path, list(base))
+    out = dict(base)
+    if "gradient" in v and "image" not in v:
+        out["image"] = None  # a new gradient replaces an image set further down (a theme's)
+    for k, val in v.items():
+        p = f"{path}.{k}"
+        if k == "gradient":
+            if not isinstance(val, list) or not 2 <= len(val) <= 4:
+                _err(p, "a list of 2-4 colours, e.g. ['#16171a', '#e8480f']")
+            out[k] = [_color(c, f"{p}[{i}]") for i, c in enumerate(val)]
+        elif k == "angle":
+            out[k] = _num(val, p, -360, 360)
+        elif k == "image":
+            out[k] = None if val in (None, False) else _image_file(val, p, base_dir)
+    return out
+
+
+def _aspect(v, path):
+    if v == "auto":
+        return "auto"
+    if isinstance(v, str) and ":" in v:
+        try:
+            a, b = (float(x) for x in v.split(":"))
+        except ValueError:
+            a = b = 0
+        if a > 0 and b > 0:
+            return round(a / b, 4)
+        _err(path, f"expected auto, 'W:H' like '2:3', or a number, got {v!r}")
+    return _num(v, path, 0.2, 5)
+
+
+def inset(v, path, base):
+    """Inset settings merged over `base` (the style's, or the scene's for a pane)."""
+    if v is None:
+        return dict(base)
+    _keys(v, path, list(DEFAULT_STYLE["inset"]))
+    out = dict(base)
+    for k, val in v.items():
+        p = f"{path}.{k}"
+        if k == "padding":
+            out[k] = _num(val, p, 0, 0.4)
+        elif k == "radius":
+            out[k] = _num(val, p, 0, 200)
+        elif k == "aspect":
+            out[k] = _aspect(val, p)
+        elif k == "position":
+            if not (isinstance(val, (list, tuple)) and len(val) == 2):
+                _err(p, f"expected [x, y] (0..1 each), got {val!r}")
+            out[k] = [_num(val[0], f"{p}[0]", 0, 1), _num(val[1], f"{p}[1]", 0, 1)]
+        elif k == "shadow":
+            out[k] = _num(val, p, 0, 1)
+    return out
+
+
+def _background(v, path):
+    if v in ("blur", "backdrop") or (isinstance(v, str) and v.startswith("#") and len(v) == 7):
+        return v
+    _err(path, f"{BACKGROUNDS}, got {v!r}")
+
+
+PANE_KEYS = ("fit", "inset", "background")  # allowed on a split pane, next to its shot
+
+
 def _image_file(v, path, base_dir):
     f = os.path.expanduser(str(v))
     f = f if os.path.isabs(f) else os.path.normpath(os.path.join(base_dir, f))
@@ -663,6 +766,10 @@ def apply_style(style, st, path, base_dir):
             style[k] = card_style(v, p, style[k], base_dir)
         elif k == "sparkle":
             style[k] = sparkle_style(v, p, style[k], base_dir)
+        elif k == "backdrop":
+            style[k] = backdrop_style(v, p, style[k], base_dir)
+        elif k == "inset":
+            style[k] = inset(v, p, style[k])
         else:
             style[k] = _num(v, p, 0)
     return style

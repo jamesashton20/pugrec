@@ -237,6 +237,20 @@ def fit_inside(r_aspect, dst):
     return (x + (w - nw) / 2, y + (h - nh) / 2, nw, nh)
 
 
+def inset_room(dst, padding):
+    """The space a card may use inside a pane: the pane minus `padding` (fraction of its
+    shorter side) on every side."""
+    x, y, w, h = dst
+    p = padding * min(w, h)
+    return (x + p, y + p, max(1.0, w - 2 * p), max(1.0, h - 2 * p))
+
+
+def place_in(card_w, card_h, room, position):
+    """A card_w x card_h rect inside `room`, at `position` ([0..1, 0..1] of the free space)."""
+    x, y, w, h = room
+    return (x + (w - card_w) * position[0], y + (h - card_h) * position[1], card_w, card_h)
+
+
 def pad_rect(r, frac):
     x, y, w, h = r
     p = frac * max(w, h)
@@ -593,13 +607,52 @@ class OutputResolver:
         rects = pane_rects(layout, shot["ratio"], self.W, self.H, self.style["gap"] * min(self.W, self.H))
         return list(zip(shot["panes"], rects))
 
+    def pane_opts(self, scene, shot):
+        """(fit, background, inset) for one pane: the pane's own (in a split) or the scene's."""
+        return (shot.get("fit") or scene["fit"], shot.get("background") or scene["background"],
+                shot.get("inset") or scene["inset"])
+
+    def frame_aspect(self, scene, shot, dst):
+        """The aspect a pane's shot is framed for: the pane's, or for an inset card with a set
+        aspect that one (and its padded room's otherwise)."""
+        fit, _, ins = self.pane_opts(scene, shot)
+        if fit != "inset":
+            return dst[2] / dst[3]
+        if ins["aspect"] != "auto":
+            return ins["aspect"]
+        room = inset_room(dst, ins["padding"])
+        return room[2] / room[3]
+
     def evals_for(self, scene):
         key = scene["index"]
         if key not in self.evals:
             sess = self.sessions[scene["source"]]
-            self.evals[key] = [ShotEval(shot, sess, scene["at"], dst[2] / dst[3], lambda m, s=scene: self.warn(s, m))
+            self.evals[key] = [ShotEval(shot, sess, scene["at"], self.frame_aspect(scene, shot, dst),
+                                        lambda m, s=scene: self.warn(s, m))
                                for shot, dst in self.panes_for(scene)]
         return self.evals[key]
+
+    def backdrop_layers(self, dst, shape, radius):
+        """The style's backdrop (gradient or cover-cropped image) filling dst."""
+        bd = self.style["backdrop"]
+        if bd.get("image"):
+            iw, ih = image_size(bd["image"])
+            crop, _ = cover_rect((0.0, 0.0, float(iw), float(ih)), dst[2] / dst[3], iw, ih)
+            self.images[bd["image"]] = {"file": bd["image"], "size": [iw, ih]}
+            return [{"type": "image", "img": bd["image"], "dst": rr(dst), "rect": rr(crop), "shape": shape,
+                     "radius": r1(radius), "bg": True}]
+        return [{"type": "gradient", "dst": rr(dst), "colors": list(bd["gradient"]), "angle": bd["angle"],
+                 "shape": shape, "radius": r1(radius), "bg": True}]
+
+    def background_layers(self, bg, stream, t, cover, dst, shape, radius):
+        """What's behind a contained view or an inset card: blur | backdrop | a colour."""
+        if bg == "blur":
+            return [{"type": "video", "src": stream, "t": round(t, 4), "rect": rr(cover), "dst": rr(dst),
+                     "shape": shape, "radius": r1(radius), "blur": r1(self.style["blur"] * self.unit),
+                     "dim": 0.35, "bg": True}]
+        if bg == "backdrop":
+            return self.backdrop_layers(dst, shape, radius)
+        return [{"type": "fill", "dst": rr(dst), "color": bg, "shape": shape, "radius": r1(radius), "bg": True}]
 
     def scene_layers(self, scene, t, dt, first, views_out=None, move_from=None, move_u=None):
         """Layers for one scene at source time t."""
@@ -616,13 +669,36 @@ class OutputResolver:
             aspect = dst[2] / dst[3]
             target = ev.target(t, dt, first)
             cover, loss = cover_rect(target, aspect, bw, bh)
-            fit = scene["fit"]
+            fit, bg, ins = self.pane_opts(scene, shot)
             mode = "cover" if fit == "cover" or (fit == "auto" and loss < LOSS_FOR_CONTAIN) else "contain"
             if ev.kind == "camera":
                 mode = "cover"  # a face is never letterboxed
+            if fit == "inset":
+                mode = "inset"
             stream = f"{src}/{ev.source}"
             shape = "round" if split else "rect"
-            if mode == "cover":
+            if mode == "inset":
+                # A rounded card with room around it, on the backdrop (or blur / a colour).
+                room = inset_room(dst, ins["padding"])
+                if ins["aspect"] != "auto" or ev.kind == "camera":
+                    a = ins["aspect"] if ins["aspect"] != "auto" else room[2] / room[3]
+                    _, _, cw, ch = fit_inside(a, room)
+                    view, _ = cover_rect(target, a, bw, bh)       # cropped to the card's shape
+                else:
+                    view = clamp_rect(target, bw, bh) if target[2] <= bw and target[3] <= bh else target
+                    _, _, cw, ch = fit_inside(view[2] / view[3], room)   # the card hugs the target
+                card = place_in(cw, ch, room, ins["position"])
+                layers += self.background_layers(bg or "backdrop", stream, t, cover, dst, shape, radius)
+                card_r = ins["radius"] * self.unit
+                if ins["shadow"] > 0:
+                    layers.append({"type": "shadow", "dst": rr(card), "radius": r1(card_r),
+                                   "blur": r1(36 * self.unit), "offset": r1(10 * self.unit),
+                                   "opacity": round(min(1.0, 0.6 * ins["shadow"]), 3), "bg": True})
+                layers.append({"type": "video", "src": stream, "t": round(t, 4), "rect": rr(view), "dst": rr(card),
+                               "shape": "round", "radius": r1(card_r)})
+                if views_out is not None:
+                    views_out.append((stream, view, card))
+            elif mode == "cover":
                 view = cover
                 if move_from is not None:
                     view = lerp_rect(move_from, view, move_u)
@@ -633,13 +709,7 @@ class OutputResolver:
             else:
                 tgt = clamp_rect(target, bw, bh) if target[2] <= bw and target[3] <= bh else target
                 inner = fit_inside(tgt[2] / tgt[3], dst)
-                if scene["background"] == "blur":
-                    layers.append({"type": "video", "src": stream, "t": round(t, 4), "rect": rr(cover),
-                                   "dst": rr(dst), "shape": shape, "radius": r1(radius),
-                                   "blur": r1(self.style["blur"] * self.unit), "dim": 0.35, "bg": True})
-                else:
-                    layers.append({"type": "fill", "dst": rr(dst), "color": scene["background"], "shape": shape,
-                                   "radius": r1(radius), "bg": True})
+                layers += self.background_layers(bg or "blur", stream, t, cover, dst, shape, radius)
                 layers.append({"type": "video", "src": stream, "t": round(t, 4), "rect": rr(tgt), "dst": rr(inner),
                                "shape": "round", "radius": r1(self.style["radius"] * self.unit)})
                 if views_out is not None:

@@ -283,6 +283,139 @@ def add_transcript(d):
         f.write(json.dumps({"type": "meta", "t": 0}) + "\n" + json.dumps(seg) + "\n")
 
 
+class Inset(unittest.TestCase):
+    """fit: inset - a rounded card with room around it, on the backdrop."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = make_session(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def split(self, pane_extra=None, **scene):
+        cam = {"camera": {}, "fit": "inset", "inset": {"aspect": "2:3"}}
+        cam.update(pane_extra or {})
+        return {"scenes": [dict({"at": 0, "shot": {"split": [{"window": {"title": "left"}}, cam], "ratio": 0.65},
+                                 "bubble": False}, **scene)]}
+
+    def test_camera_card_in_a_split_like_the_screenshot(self):
+        p = plan(self.split(), self.d)
+        f = frame_at(p, 5.0)
+        cam = videos(f, "/camera")[0]
+        x, y, w, h = cam["dst"]
+        self.assertAlmostEqual(w / h, 2 / 3, places=2)                 # a portrait card
+        self.assertAlmostEqual(cam["rect"][2] / cam["rect"][3], 2 / 3, places=2)   # cropped to it
+        self.assertEqual(cam["shape"], "round")
+        self.assertAlmostEqual(cam["radius"], 18.0)
+        grads = [l for l in f["layers"] if l["type"] == "gradient"]
+        self.assertEqual(len(grads), 1)                                 # the PugPal backdrop, right pane only
+        gx, gy, gw, gh = grads[0]["dst"]
+        self.assertGreater(gx, 1000)
+        self.assertTrue(gx < x and x + w < gx + gw and gy < y and y + h < gy + gh)   # card inside, with room
+        self.assertEqual(grads[0]["colors"], ["#16171a", "#32231f", "#e8480f"])
+        self.assertTrue(grads[0]["bg"])
+        self.assertEqual(videos(f, "/screen")[0].get("dst")[0] < 100, True)          # the window pane untouched
+
+    def test_whole_frame_window_card_hugs_the_window(self):
+        p = plan({"scenes": [{"at": 0, "shot": {"window": {"title": "left"}}, "fit": "inset", "bubble": False}]}, self.d)
+        f = frame_at(p, 1.0)
+        card = videos(f, "/screen")[0]
+        x, y, w, h = card["dst"]
+        rx, ry, rw, rh = card["rect"]
+        self.assertAlmostEqual(w / h, rw / rh, places=2)                # its own shape, no crop
+        pad = 0.06 * 1080
+        self.assertGreaterEqual(y, pad - 0.5)
+        self.assertLessEqual(y + h, 1080 - pad + 0.5)
+        self.assertEqual([l for l in f["layers"] if l["type"] == "gradient"][0]["dst"], [0.0, 0.0, 1920.0, 1080.0])
+
+    def test_pane_fit_wins_over_the_scene_fit(self):
+        p = plan(self.split(fit="cover"), self.d)
+        f = frame_at(p, 5.0)
+        self.assertAlmostEqual(videos(f, "/camera")[0]["radius"], 18.0)   # the pane's inset
+        self.assertAlmostEqual(videos(f, "/screen")[0]["radius"], 6.0)    # the scene's cover, split rounding
+
+    def test_vertical_stacks_and_keeps_the_card_inside_its_pane(self):
+        data = self.split()
+        data["outputs"] = [{"name": "vertical", "size": "1080x1920"}]
+        p = plan(data, self.d, "vertical")
+        f = frame_at(p, 5.0)
+        x, y, w, h = videos(f, "/camera")[0]["dst"]
+        self.assertGreater(y, 1000)                                     # the lower pane
+        self.assertLessEqual(y + h, 1920)
+
+    def test_position_and_shadow(self):
+        p = plan({"scenes": [{"at": 0, "shot": "camera", "fit": "inset", "bubble": False,
+                              "inset": {"aspect": 1, "position": [0, 0], "shadow": 0.5}}]}, self.d)
+        f = frame_at(p, 2.0)
+        x, y, w, h = videos(f, "/camera")[0]["dst"]
+        pad = 0.06 * 1080
+        self.assertAlmostEqual(x, pad, places=0)                        # top-left of the room
+        self.assertAlmostEqual(y, pad, places=0)
+        self.assertAlmostEqual(w, h, places=0)
+        types = [l["type"] for l in f["layers"]]
+        self.assertLess(types.index("shadow"), types.index("video"))    # under the card
+        self.assertAlmostEqual([l for l in f["layers"] if l["type"] == "shadow"][0]["opacity"], 0.3)
+
+    def test_no_shadow_by_default(self):
+        p = plan(self.split(), self.d)
+        self.assertFalse([l for l in frame_at(p, 5.0)["layers"] if l["type"] == "shadow"])
+
+    def test_image_backdrop_is_cover_cropped(self):
+        from PIL import Image
+        Image.new("RGB", (400, 400), (0, 80, 160)).save(os.path.join(self.d, "stage.png"))
+        p = plan({"style": {"backdrop": {"image": "stage.png"}},
+                  "scenes": [{"at": 0, "shot": "camera", "fit": "inset", "bubble": False}]}, self.d)
+        img = [l for l in frame_at(p, 2.0)["layers"] if l["type"] == "image"][0]
+        self.assertEqual(img["dst"], [0.0, 0.0, 1920.0, 1080.0])
+        rx, ry, rw, rh = img["rect"]
+        self.assertAlmostEqual(rw / rh, 16 / 9, places=2)               # a 16:9 slice of the square
+        self.assertIn(os.path.join(self.d, "stage.png"), p["images"])
+
+    def test_background_can_still_be_blur_or_a_colour(self):
+        p = plan(self.split({"background": "#224466"}), self.d)
+        fills = [l for l in frame_at(p, 5.0)["layers"] if l["type"] == "fill" and l["color"] == "#224466"]
+        self.assertEqual(len(fills), 1)
+        p = plan({"scenes": [{"at": 0, "shot": {"window": {"title": "left"}}, "fit": "contain",
+                              "background": "backdrop", "bubble": False}]}, self.d)
+        self.assertTrue([l for l in frame_at(p, 1.0)["layers"] if l["type"] == "gradient"])
+
+    def test_move_lifts_the_camera_into_a_card(self):
+        p = plan({"scenes": [{"at": 0, "shot": "camera", "bubble": False},
+                             {"at": 5, "shot": "camera", "fit": "inset", "transition": {"move": 1.0},
+                              "bubble": False}]}, self.d)
+        self.assertFalse([w for w in p["warnings"] if "move" in w])
+        widths = [videos(frame_at(p, t), "/camera")[0]["dst"][2] for t in (4.9, 5.5, 6.5)]
+        self.assertGreater(widths[0], widths[1])
+        self.assertGreater(widths[1], widths[2])
+        grad = [l for l in frame_at(p, 5.5)["layers"] if l["type"] == "gradient"]
+        self.assertTrue(grad and 0 < grad[0]["opacity"] < 1)            # the backdrop fades in
+
+    def test_theme_backdrop(self):
+        sc = S.parse({"style": {"backdrop": {"gradient": ["#000000", "#ffffff"], "angle": 90}},
+                      "scenes": [{"at": 0, "shot": "screen"}]}, self.d)
+        self.assertEqual(sc["style"]["backdrop"]["gradient"], ["#000000", "#ffffff"])
+        self.assertIsNone(sc["style"]["backdrop"]["image"])
+
+    def test_validation(self):
+        bad = [({"style": {"inset": {"aspect": "2-3"}}}, "inset.aspect"),
+               ({"style": {"backdrop": {"gradient": ["#000000"]}}}, "2-4 colours"),
+               ({"style": {"inset": {"radiuss": 4}}}, "did you mean 'radius'"),
+               ({"scenes_bg": True}, "background"),
+               ({"pane_fit": True}, "fit")]
+        for extra, msg in bad:
+            data = {"scenes": [{"at": 0, "shot": "screen"}]}
+            if extra.get("scenes_bg"):
+                data["scenes"][0]["background"] = "fancy"
+            elif extra.get("pane_fit"):
+                data["scenes"][0]["shot"] = {"split": [{"camera": {}, "fit": "insett"}, "screen"]}
+            else:
+                data.update(extra)
+            with self.assertRaises(S.ScriptError) as cm:
+                S.parse(data, self.d)
+            self.assertIn(msg, str(cm.exception))
+
+
 class Captions(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
