@@ -181,6 +181,22 @@ class Resolver(unittest.TestCase):
         blurs = [l for l in videos(frame_at(p, 5.5)) if l.get("blur")]
         self.assertTrue(blurs and 0 < blurs[0]["opacity"] < 1)
 
+    def test_a_cut_inside_a_fade_does_not_end_it_early(self):
+        # The fade runs on output time: a 0.5 s cut 0.3 s into a 1 s fade used to jump it to
+        # 80% done in one frame (a visible pop).
+        p = plan({"cuts": {"ranges": [[5.3, 5.8]]},
+                  "scenes": [{"at": 0, "shot": "screen", "fit": "cover", "bubble": False},
+                             {"at": 5, "shot": {"rect": [0, 0, 0.25, 0.25]}, "fit": "cover",
+                              "transition": {"fade": 1.0}, "bubble": False}]}, self.d)
+        ops = []
+        for f in p["frames"]:
+            if 5.0 <= f["t"] <= 6.3:
+                vids = videos(f)
+                ops.append(vids[-1].get("opacity", 1.0) if len(vids) > 1 else 1.0)
+        steps = [b - a for a, b in zip(ops, ops[1:])]
+        self.assertLess(max(steps), 0.25)                     # no jump (10 fps, 1 s ease: < 0.16 a step)
+        self.assertGreaterEqual(sum(1 for o in ops if o < 1.0), 9)   # ~1 s of output frames fading
+
     def test_move_cross_fades_a_colour_background(self):
         # contain on a colour (not blur): the colour used to vanish for the whole move.
         p = plan({"scenes": [{"at": 0, "shot": {"window": {"title": "left"}}, "fit": "contain",

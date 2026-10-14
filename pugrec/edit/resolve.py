@@ -433,6 +433,11 @@ class OutputResolver:
         self.cur_scene = None
         self.prev = None          # (scene, layers fn state) during a transition
         self.trans_start = None
+        # Output seconds, counted by frame() (once per output frame). Transitions and the bubble's
+        # animation run on it, not on source time: a cut inside a fade (pauses: ...) jumps the
+        # source clock and used to end the fade early - a visible pop.
+        self.clock = -1.0
+        self.frame_i = -1   # output frames counted by frame(); clock = frame_i * dt (no float drift)
         self.bubble_from = None
         self.bubble_cur = None
         self.bubble_spring = None
@@ -804,11 +809,11 @@ class OutputResolver:
         target = self.bubble_target(scene)
         if self.bubble_cur is None:
             self.bubble_cur = dict(target)
-            self.bubble_from, self.bubble_t0 = dict(target), t
+            self.bubble_from, self.bubble_t0 = dict(target), self.clock
         if changed:
-            self.bubble_from, self.bubble_t0 = dict(self.bubble_cur), t
+            self.bubble_from, self.bubble_t0 = dict(self.bubble_cur), self.clock
             self.bubble_dur = trans_d if trans_d > 0 else BUBBLE_MOVE_S
-        u = ease((t - self.bubble_t0) / self.bubble_dur) if getattr(self, "bubble_dur", 0) else 1.0
+        u = ease((self.clock - self.bubble_t0) / self.bubble_dur) if getattr(self, "bubble_dur", 0) else 1.0
         cur = {k: self.bubble_from[k] + (target[k] - self.bubble_from[k]) * u for k in ("cx", "cy", "d", "a")}
         cur["shape"] = target["shape"]
         self.bubble_cur = cur
@@ -860,6 +865,8 @@ class OutputResolver:
 
     # -- frames ----------------------------------------------------------
     def frame(self, source, t, dt, jumped):
+        self.frame_i += 1
+        self.clock = self.frame_i * dt
         scene = self.scene_at(source, t)
         changed = scene is not self.cur_scene
         trans = scene["transition"]
@@ -868,7 +875,7 @@ class OutputResolver:
             self.cur_scene = scene
             if prev is not None and not jumped and trans["type"] != "cut":
                 self.prev = prev
-                self.trans_start = t
+                self.trans_start = self.clock
                 self.trans = dict(trans)
                 if trans["type"] == "move":
                     if self.prev_view is None or self._move_incompatible(prev, scene):
@@ -882,8 +889,11 @@ class OutputResolver:
             self.evals.pop(scene["index"], None)  # fresh state when a scene (re)starts
         views = []
         layers = []
-        in_trans = self.prev is not None and t - self.trans_start < self.trans["duration"]
-        u = ease((t - self.trans_start) / self.trans["duration"]) if in_trans else 1.0
+        # A transition lasts the frames that start before its end: round() keeps float noise from
+        # adding or dropping its last frame.
+        in_trans = self.prev is not None and \
+            round((self.clock - self.trans_start) / dt) < round(self.trans["duration"] / dt)
+        u = ease((self.clock - self.trans_start) / self.trans["duration"]) if in_trans else 1.0
         if in_trans and self.trans["type"] in ("fade", "sparkle"):
             layers += self.scene_layers(self.prev, t, dt, False)
             new = self.scene_layers(scene, t, dt, changed, views)
@@ -891,11 +901,11 @@ class OutputResolver:
                 l["opacity"] = round(l.get("opacity", 1.0) * u, 3)
             layers += new
             if self.trans["type"] == "sparkle":
-                raw = (t - self.trans_start) / self.trans["duration"]
+                raw = (self.clock - self.trans_start) / self.trans["duration"]
                 layers += self.sparkle_burst(scene["index"], raw)
         elif in_trans and self.trans["type"] == "sweep":
             # The sprite crosses the frame left to right; the new scene is revealed behind it.
-            raw = (t - self.trans_start) / self.trans["duration"]
+            raw = (self.clock - self.trans_start) / self.trans["duration"]
             layers += self.scene_layers(self.prev, t, dt, False)
             new = self.scene_layers(scene, t, dt, changed, views)
             sprite, edge = self.sweep_sprite(raw)
