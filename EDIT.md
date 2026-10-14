@@ -218,7 +218,8 @@ style:
   logo: null                 # {file: logo.png, corner: top-right, size: 0.12, margin: 0.03, opacity: 0.9}
   card: {background: "#16171a", color: "#f1e4d9", font: null, duration: 3.0,         # intro/outro cards; font null = captions'
          image: null, image_size: 0.12,   # image: a brand icon, centred above the title; size = its height / the shorter side
-         fade_in: null, fade_out: 0.4}    # seconds; fade_in null = 0 for the intro (frame 0 = thumbnail), 0.4 for the outro
+         fade_in: null, fade_out: 0.4,    # seconds; fade_in null = 0 for the intro (frame 0 = thumbnail), 0.4 for the outro
+         title_case: false}               # true: titles in Title Case ("decision and gated cards" -> "Decision and Gated Cards")
   spotlight: null            # {window: SEL, blur: 40, dim: 0.35}
   sparkle:                   # only for themes that want the sparkle/sweep transitions (opt-in)
     {colors: null,           # star colours; null = white + accent
@@ -283,6 +284,9 @@ with silence underneath (the audio stays in sync). The logo watermark shows on c
 The intro is **fully drawn on frame 0** by default (WhatsApp, LinkedIn and YouTube use the first
 frame as the thumbnail; a fade-in made it a blank square); the outro fades in over 0.4 s.
 `card.fade_in` / `card.fade_out` (seconds, 0 = none) change both cards; a card's own keys win.
+`card.title_case: true` (a brand's house style, set in its theme) writes card titles in Title Case:
+only all-lowercase words change, so names and codes (FieldPal, COUPA, KAL-132) stay as written, and
+small words (and, of, the, ...) stay lowercase except first and last.
 A **theme** may carry `intro:` / `outro:` too (a brand's standard closing card): an edit gets them
 unless it sets its own, and `outro: false` / `intro: false` in edit.yaml turns them off.
 

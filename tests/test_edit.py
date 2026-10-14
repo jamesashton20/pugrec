@@ -672,6 +672,25 @@ class Themes(unittest.TestCase):
         self.assertIn(logo, p["images"])
         self.assertEqual(frame_at(p, 14.0)["src"], "card:outro")
 
+    def test_title_case(self):
+        self.assertEqual(S.title_case("decision and gated cards"), "Decision and Gated Cards")
+        self.assertEqual(S.title_case("the FieldPal app for COUPA, KAL-132"), "The FieldPal App for COUPA, KAL-132")
+        self.assertEqual(S.title_case("workflow: start-and-end tasks in"), "Workflow: Start-And-End Tasks In")
+        self.assertEqual(S.title_case("what's new"), "What's New")
+
+    def test_card_title_case_is_a_style_option(self):
+        data = {"intro": "decision and gated cards", "outro": {"title": "see you in the app"},
+                "scenes": [{"at": 0, "shot": "screen"}]}
+        title = lambda p, t: [l for l in frame_at(p, t)["layers"] if l["type"] == "text"][0]["words"][0]["w"]
+        p = plan(data, self.d)
+        self.assertEqual(title(p, 1.0), "decision and gated cards")     # off by default: as written
+        p = plan({**data, "style": {"card": {"title_case": True}}}, self.d)
+        self.assertEqual(title(p, 1.0), "Decision and Gated Cards")
+        self.assertEqual(title(p, 14.5), "See You in the App")
+        with self.assertRaises(S.ScriptError) as cm:
+            S.parse({"style": {"card": {"title_case": "yes"}}, "scenes": [{"at": 0, "shot": "screen"}]})
+        self.assertIn("true or false", str(cm.exception))
+
     def test_card_fades(self):
         def ops(f):
             return [l.get("opacity", 1) for l in f["layers"] if l["type"] in ("text", "image")]

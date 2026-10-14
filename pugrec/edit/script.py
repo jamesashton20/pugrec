@@ -8,6 +8,7 @@ Shorthands are expanded here, so the resolver sees one form per concept.
 
 import difflib
 import os
+import re
 
 CORNERS = ("top-left", "top-right", "bottom-left", "bottom-right")
 FITS = ("auto", "cover", "contain", "inset")
@@ -28,7 +29,8 @@ DEFAULT_STYLE = {  # = the PugPal look; a theme (style.theme) or edit.yaml's sty
              "image": None, "image_size": 0.12,    # image: a brand icon above the title; size = height / shorter side
              # seconds; fade_in null = 0 for the intro (frame 0 is the thumbnail on WhatsApp,
              # LinkedIn, YouTube: it must be the whole card), 0.4 for the outro
-             "fade_in": None, "fade_out": 0.4},
+             "fade_in": None, "fade_out": 0.4,
+             "title_case": False},   # true: card titles in Title Case (a brand's house style)
     "background": "#16171a",          # PugPal ink: behind splits / contain without blur
     "blur": 40,                        # px at 1080p for blurred backgrounds
     "radius": 6,                       # px at 1080p: rounded panes (PugPal look)
@@ -540,7 +542,30 @@ def card_style(v, path, base, base_dir="."):
             out[k] = _num(val, f"{path}.image_size", 0.02, 0.6)
         elif k in ("fade_in", "fade_out"):
             out[k] = None if val is None and k == "fade_in" else _num(val, f"{path}.{k}", 0, 5)
+        elif k == "title_case":
+            if not isinstance(val, bool):
+                _err(f"{path}.title_case", f"true or false, got {val!r}")
+            out[k] = val
     return out
+
+
+SMALL_WORDS = {"a", "an", "and", "as", "at", "but", "by", "for", "in", "nor", "of", "on", "or",
+               "the", "to", "via", "vs", "with"}
+
+
+def title_case(s):
+    """"decision and gated cards" -> "Decision and Gated Cards". Only all-lowercase words change:
+    names and codes the author already cased (FieldPal, COUPA, KAL-132, iPhone) stay as written.
+    Small words stay lowercase except first and last."""
+    words = s.split(" ")
+    last = max((i for i, w in enumerate(words) if w), default=0)
+    out = []
+    for i, w in enumerate(words):
+        if not re.fullmatch(r"[a-z][a-z'-]*[:,.!?]?", w) or (w.rstrip(":,.!?") in SMALL_WORDS and 0 < i < last):
+            out.append(w)
+        else:
+            out.append("-".join(p[:1].upper() + p[1:] for p in w.split("-")))
+    return " ".join(out)
 
 
 SPARKLY = ("sparkle", "sweep")
@@ -689,7 +714,8 @@ def card(v, path, style):
     fade_in = v.get("fade_in", cs["fade_in"])
     if fade_in is None:
         fade_in = 0.0 if path == "intro" else 0.4
-    return {"title": str(v["title"]), "subtitle": str(v["subtitle"]) if v.get("subtitle") else None,
+    title = title_case(str(v["title"])) if cs["title_case"] else str(v["title"])
+    return {"title": title, "subtitle": str(v["subtitle"]) if v.get("subtitle") else None,
             "duration": _num(v.get("duration", cs["duration"]), f"{path}.duration", 0.5, 30),
             "fade_in": _num(fade_in, f"{path}.fade_in", 0, 5),
             "fade_out": _num(v.get("fade_out", cs["fade_out"]), f"{path}.fade_out", 0, 5)}
