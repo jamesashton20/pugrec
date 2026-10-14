@@ -203,6 +203,10 @@ Rules that matter:
   The backdrop comes from the theme (`style.backdrop`); without one it's the PugPal gradient. Keep
   `shadow` at 0 unless the theme or James wants one. Look at a built frame: the card should have
   even room around it and nothing important cut off.
+- *Slow push-in* - also an option, not a default: `push: true` on a scene that holds a while
+  (a talking-head intro/outro, a long camera or window shot, an inset card) makes it feel alive.
+  Skip it on short scenes (< ~3 s) and on cursor/auto shots. Use it when James asks for motion /
+  "Ken Burns" / "zoom in slowly", or with the presenter look above.
 - *Vertical output:* give it tighter shots via `vertical:` overrides (cursor zoom 1.2-1.4).
 - *For a customer / brand:* `style: {theme: <name>}` (`pugrec themes` lists them; an unknown name
   is an error listing the installed ones), plus `intro: {title, subtitle}` / `outro:` title cards
@@ -351,6 +355,7 @@ Each scene lasts until the next scene's `at`.
 | `fit` | `auto` (default) / `cover` / `contain` / `inset` (below) |
 | `background` | behind a `contain` view or an `inset` card: `blur` (contain's default), `backdrop` (inset's default: the style's backdrop) or a colour `"#16171a"` |
 | `inset` | for `fit: inset`: `{padding, radius, aspect, position, shadow}` over `style.inset` (below) |
+| `push` | a slow push-in while the shot holds: `true`, a number (`to`), `{to, over}`, or `false` (default: the style's, off) - below |
 | `transition` | into this scene: `cut`, `{move: s}`, `{fade: s}` (default `{move: 0.6}`) |
 | `bubble` | camera bubble: `{corner, size, margin, shape, show}`, `false` to hide, `true` to show. **Sticky**: applies until a later scene changes it |
 | `spotlight` | `false` / `true` / `{window, blur, dim}` for this scene only (default: the style's) |
@@ -417,6 +422,26 @@ scenes:
 - Behind the card: the style's `backdrop` (default), or `background: blur` / `"#rrggbb"`.
   `background: backdrop` also works for `fit: contain`.
 - In a split only that pane is a card; the other pane is drawn as usual.
+
+#### Push: a slow push-in while a shot holds
+
+```yaml
+  - at: 4.6
+    shot: camera
+    push: true                 # = {to: 0.8, over: 10}: the view tightens to 80% over 10 s
+  - at: 30
+    shot: {window: {address: "0x5616f59775b0"}}
+    push: {to: 0.9, over: 6}   # gentler and quicker
+```
+The "Ken Burns" move: barely noticeable, but a long hold on a face or an app feels alive. It's
+an option, off unless a scene (or a theme's `style.push`) asks; `push: false` turns a style's off
+for one scene. It eases in over 1 s, moves steadily, eases out at `to` and then holds; a shorter
+scene simply gets less of it. It follows the video as watched, so cuts inside the scene
+(`pauses`, `fillers`) don't make it jump. It tightens about the view's centre - the face, for the
+camera - and works full frame, in split panes (both panes), in `contain` views and inside inset
+cards (the card stays, the picture tightens). Not on `cursor`/`auto` shots (they move already;
+`check` warns). `push: true` is 0.8 on wide outputs and 0.9 on tall ones: the camera is 1080p and
+a 9:16 frame already enlarges it ~1.8x, so a full push there gets soft (an explicit `to` is used as is).
 
 #### Spotlight: one window sharp, the rest of the screen blurred
 
@@ -487,6 +512,7 @@ style:
      angle: 160,             # CSS degrees: 0 = towards the top, 90 = right, 180 = down
      image: null}            # or an image (PNG/JPEG/WebP, cover-cropped); setting one replaces the other
   inset: {padding: 0.06, radius: 18, aspect: auto, position: [0.5, 0.5], shadow: 0}   # fit: inset defaults
+  push: null                 # e.g. {to: 0.8, over: 10}: every scene pushes in unless it says push: false
   transition: {move: 0.6}    # default transition
 ```
 The bubble hides automatically when the shot itself shows the camera. Captions appear when the

@@ -118,10 +118,8 @@ James's rule (2026-10-13): **commit little and often.**
   Don't tune it (zoom feel, bubble crop, speed); that work belongs in the editor.
 - Editor v1 done 2026-10-13: GPU transcript, script + resolver, build, preview, captions,
   transcript cuts, draft; 45 tests. Sample edit: ~/Videos/PugRec/2026-10-13_14-38-12/edit.yaml.
-- **Pinned (James, 2026-10-14): slow push-in while holding on the camera.** Seen on YouTube: on a
-  camera shot that lasts a while, the view slowly zooms in, e.g. from 100% to ~80% of the frame
-  over ~10 s - subtle, it just adds motion. An option like the others (not a default): e.g.
-  `{camera: {push: 0.8}}` or a scene `drift:`; resolver-only (the camera crop shrinks over the
-  scene's time, eased; face-centred), so both compositors already draw it. Also nice on inset cards.
+- Done 2026-10-14: `fit: inset` (cards on a backdrop) and `push` (slow push-in, James's pinned idea).
+  Transitions, the bubble and push run on the output clock (frame count), never on source time:
+  cuts inside a scene used to end fades early (a visible pop).
 - Next ideas: move transitions between contain views; overlays / other sources; key-shortcut
   captions from `key` events; title cards; VAAPI decode in builds; a keybind in the dotfiles.
