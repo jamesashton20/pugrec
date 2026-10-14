@@ -237,6 +237,22 @@ class Resolver(unittest.TestCase):
         p = plan({"style": {"spotlight": True}, "scenes": [{"at": 0, "shot": "camera"}]}, self.d)
         self.assertFalse([l for l in videos(frame_at(p, 2.0)) if l.get("blur")])
 
+    def test_camera_follow_false_holds_the_framing(self):
+        # A face drifting left to right: the camera follows it by default, holds with follow: false.
+        with open(os.path.join(self.d, "faces.jsonl"), "w") as f:
+            for i in range(101):
+                f.write(json.dumps({"t": int(i * 0.1 * SEC), "x": 0.2 + 0.4 * i / 100, "y": 0.3,
+                                    "w": 0.1, "h": 0.2}) + "\n")
+        try:
+            moving = plan({"scenes": [{"at": 0, "shot": {"camera": {"zoom": 1.5}}}]}, self.d)
+            still = plan({"scenes": [{"at": 0, "shot": {"camera": {"zoom": 1.5}, "follow": False}}]}, self.d)
+        finally:
+            os.remove(os.path.join(self.d, "faces.jsonl"))
+        xs = lambda p: [videos(frame_at(p, t), "/camera")[0]["rect"][0] for t in (1.0, 5.0, 9.0)]
+        self.assertGreater(xs(moving)[2], xs(moving)[0] + 300)    # followed the face
+        self.assertEqual(len(set(xs(still))), 1)                   # held where it started
+        self.assertEqual(xs(still)[0], videos(frame_at(moving, 0.0), "/camera")[0]["rect"][0])
+
     def test_fade_transition_blends(self):
         p = plan({"scenes": [{"at": 0, "shot": "screen", "bubble": False},
                              {"at": 5, "shot": "camera", "transition": {"fade": 1.0}}]}, self.d)

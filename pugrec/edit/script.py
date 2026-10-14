@@ -139,10 +139,13 @@ def shot(v, path):
         _keys(v, path, ["screen"])
         return {"kind": "screen"}
     if kind == "camera":
-        _keys(v, path, ["camera"])
+        _keys(v, path, ["camera", "follow"])
         opt = v["camera"] or {}
         _keys(opt, p, ["zoom"])
-        return {"kind": "camera", "zoom": _num(opt.get("zoom", 1.0), f"{p}.zoom", 1, 4)}
+        out = {"kind": "camera", "zoom": _num(opt.get("zoom", 1.0), f"{p}.zoom", 1, 4)}
+        if not v.get("follow", True):
+            out["follow"] = False   # only when asked: existing edits keep resolving to the same plan
+        return out
     if kind == "auto":
         _keys(v, path, ["auto"])
         opt = v["auto"] or {}

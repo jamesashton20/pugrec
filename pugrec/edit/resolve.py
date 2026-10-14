@@ -432,7 +432,9 @@ class ShotEval:
     def target(self, t, dt, first):
         """Smoothed target rect at t."""
         r = self.raw_target(t)
-        if self.kind in ("screen", "rect") or (self.kind == "window" and not self.shot.get("follow", True)):
+        # follow: false holds a window/camera where it was when the scene started (a still camera
+        # frame instead of one that bobs with every lean - push can still tighten it).
+        if self.kind in ("screen", "rect") or (self.kind in ("window", "camera") and not self.shot.get("follow", True)):
             if self.frozen is None:
                 self.frozen = r
             return self.frozen
