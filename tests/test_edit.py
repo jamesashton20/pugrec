@@ -434,6 +434,84 @@ class Inset(unittest.TestCase):
             self.assertIn(msg, str(cm.exception))
 
 
+class Push(unittest.TestCase):
+    """push: a slow push-in while a shot holds (Ken Burns)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = make_session(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def widths(self, p, src="/screen", t0=0.0, t1=10.0):
+        return [(f["t"], videos(f, src)[-1]["rect"][2]) for f in p["frames"] if t0 <= f["t"] <= t1]
+
+    def test_curve_ease_in_steady_ease_out(self):
+        self.assertEqual(R.push_amount(0, 10), 0.0)
+        self.assertEqual(R.push_amount(10, 10), 1.0)
+        self.assertAlmostEqual(R.push_amount(5, 10), 0.5)
+        self.assertLess(R.push_amount(0.5, 10), 0.5 * 0.5 / 9)     # slower than steady at first
+        steps = [R.push_amount(t + 0.1, 10) - R.push_amount(t, 10) for t in (2, 4, 6, 8)]
+        self.assertTrue(max(steps) - min(steps) < 1e-9)              # a steady rate in the middle
+
+    def test_screen_push_to_80_percent_over_10s(self):
+        p = plan({"scenes": [{"at": 0, "shot": {"rect": [0, 0, 2560, 1080]}, "fit": "cover", "push": True,
+                              "bubble": False}]}, self.d)
+        w = dict(self.widths(p))
+        self.assertAlmostEqual(w[0.0], 2560, delta=1)
+        self.assertAlmostEqual(w[9.9], 0.8 * 2560, delta=4)
+        ws = [v for _, v in sorted(w.items())]
+        self.assertTrue(all(b <= a + 1e-6 for a, b in zip(ws, ws[1:])))      # only ever tighter
+        self.assertLess(max(a - b for a, b in zip(ws, ws[1:])), 0.01 * 2560)  # and slowly
+
+    def test_tall_outputs_push_half_as_far(self):
+        p = plan({"outputs": [{"name": "vertical", "size": "1080x1920"}],
+                  "scenes": [{"at": 0, "shot": {"rect": [0, 0, 1215, 2160]}, "fit": "cover", "push": True,
+                              "bubble": False}]}, self.d, "vertical")
+        w = dict(self.widths(p))
+        self.assertAlmostEqual(w[9.9] / w[0.0], 0.9, delta=0.005)
+
+    def test_explicit_to_and_over(self):
+        p = plan({"scenes": [{"at": 0, "shot": {"rect": [0, 0, 2560, 1080]}, "fit": "cover", "bubble": False,
+                              "push": {"to": 0.9, "over": 4}}]}, self.d)
+        w = dict(self.widths(p))
+        self.assertAlmostEqual(w[4.0] / w[0.0], 0.9, delta=0.002)
+        self.assertAlmostEqual(w[9.0], w[4.0], delta=0.5)                    # then it holds
+
+    def test_a_cut_inside_does_not_jump_it(self):
+        p = plan({"cuts": {"ranges": [[3.0, 6.0]]},
+                  "scenes": [{"at": 0, "shot": {"rect": [0, 0, 2560, 1080]}, "fit": "cover", "push": True,
+                              "bubble": False}]}, self.d)
+        ws = [v for _, v in self.widths(p, t0=0, t1=6.5)]
+        self.assertLess(max(a - b for a, b in zip(ws, ws[1:])), 0.01 * 2560)  # 3 s of source skipped, no jump
+
+    def test_camera_and_inset_card(self):
+        p = plan({"scenes": [{"at": 0, "shot": "camera", "fit": "inset", "push": True, "bubble": False}]}, self.d)
+        a, b = videos(frame_at(p, 0.0), "/camera")[0], videos(frame_at(p, 9.9), "/camera")[0]
+        self.assertEqual(a["dst"], b["dst"])                                  # the card stays
+        self.assertAlmostEqual(b["rect"][2] / a["rect"][2], 0.8, delta=0.01)  # the picture tightens
+
+    def test_off_by_default_and_false_wins_over_the_style(self):
+        base = {"scenes": [{"at": 0, "shot": {"rect": [0, 0, 2560, 1080]}, "fit": "cover", "bubble": False}]}
+        w = dict(self.widths(plan(base, self.d)))
+        self.assertAlmostEqual(w[9.9], w[0.0])
+        base["style"] = {"push": {"to": 0.8}}
+        base["scenes"][0]["push"] = False
+        w = dict(self.widths(plan(base, self.d)))
+        self.assertAlmostEqual(w[9.9], w[0.0])
+
+    def test_cursor_shots_are_left_alone_with_a_warning(self):
+        p = plan({"scenes": [{"at": 0, "shot": {"cursor": {"zoom": 2}}, "push": True, "bubble": False}]}, self.d)
+        self.assertTrue([w for w in p["warnings"] if "push: only on" in w])
+
+    def test_validation(self):
+        for v, msg in ((0.3, "out of range"), ({"too": 0.8}, "did you mean 'to'"), ({"to": 0.8, "over": 0}, "out of range")):
+            with self.assertRaises(S.ScriptError) as cm:
+                S.parse({"scenes": [{"at": 0, "shot": "screen", "push": v}]}, self.d)
+            self.assertIn(msg, str(cm.exception))
+
+
 class Captions(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

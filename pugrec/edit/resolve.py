@@ -251,6 +251,28 @@ def place_in(card_w, card_h, room, position):
     return (x + (w - card_w) * position[0], y + (h - card_h) * position[1], card_w, card_h)
 
 
+def push_amount(elapsed, over, ramp=1.0):
+    """0 -> 1 progress of a push-in after `elapsed` s: speeds up over `ramp` s, steady, slows down
+    over the last `ramp` s, done at `over` (a trapezoid velocity: a camera move, not an effect)."""
+    if elapsed <= 0:
+        return 0.0
+    if elapsed >= over:
+        return 1.0
+    r = min(ramp, over / 2)
+    v = 1 / (over - r)
+    if elapsed < r:
+        return 0.5 * v * elapsed * elapsed / r
+    if elapsed < over - r:
+        return 0.5 * v * r + v * (elapsed - r)
+    return 1 - 0.5 * v * (over - elapsed) ** 2 / r
+
+
+def shrink_rect(r, s):
+    """r scaled by s about its centre."""
+    x, y, w, h = r
+    return (x + w * (1 - s) / 2, y + h * (1 - s) / 2, w * s, h * s)
+
+
 def pad_rect(r, frac):
     x, y, w, h = r
     p = frac * max(w, h)
@@ -438,6 +460,7 @@ class OutputResolver:
         # source clock and used to end the fade early - a visible pop.
         self.clock = -1.0
         self.frame_i = -1   # output frames counted by frame(); clock = frame_i * dt (no float drift)
+        self.scene_t0 = {}  # scene index -> output clock when it (last) started: push-ins run on it
         self.bubble_from = None
         self.bubble_cur = None
         self.bubble_spring = None
@@ -612,6 +635,22 @@ class OutputResolver:
         rects = pane_rects(layout, shot["ratio"], self.W, self.H, self.style["gap"] * min(self.W, self.H))
         return list(zip(shot["panes"], rects))
 
+    PUSH_KINDS = ("camera", "window", "screen", "rect")  # cursor/auto already move
+
+    def pushed(self, scene, kind, view):
+        """The view, slowly tightened while the scene holds (`push`), on the output clock - cuts
+        inside the scene don't make it jump. Shrinks about the view's centre (the face, for the
+        camera), so it stays inside the source."""
+        pu = scene.get("push")
+        if not pu:
+            return view
+        if kind not in self.PUSH_KINDS:
+            self.warn(scene, f"push: only on camera, window, screen and rect shots (not {kind}); ignored")
+            return view
+        to = pu["to"] if pu["to"] is not None else (0.8 if self.W >= self.H else 0.9)
+        elapsed = self.clock - self.scene_t0.get(scene["index"], self.clock)
+        return shrink_rect(view, 1 - (1 - to) * push_amount(elapsed, pu["over"]))
+
     def pane_opts(self, scene, shot):
         """(fit, background, inset) for one pane: the pane's own (in a split) or the scene's."""
         return (shot.get("fit") or scene["fit"], shot.get("background") or scene["background"],
@@ -699,6 +738,7 @@ class OutputResolver:
                 else:
                     view = clamp_rect(target, bw, bh) if target[2] <= bw and target[3] <= bh else target
                     _, _, cw, ch = fit_inside(view[2] / view[3], room)   # the card hugs the target
+                view = self.pushed(scene, ev.kind, view)       # the card stays, the picture tightens
                 card = place_in(cw, ch, room, ins["position"])
                 layers += self.background_layers(bg or "backdrop", stream, t, cover, dst, shape, radius)
                 card_r = ins["radius"] * self.unit
@@ -711,7 +751,7 @@ class OutputResolver:
                 if views_out is not None:
                     views_out.append((stream, view, card))
             elif mode == "cover":
-                view = cover
+                view = self.pushed(scene, ev.kind, cover)
                 if move_from is not None:
                     view = lerp_rect(move_from, view, move_u)
                 layers.append({"type": "video", "src": stream, "t": round(t, 4), "rect": rr(view), "dst": rr(dst),
@@ -721,6 +761,7 @@ class OutputResolver:
             else:
                 tgt = clamp_rect(target, bw, bh) if target[2] <= bw and target[3] <= bh else target
                 inner = fit_inside(tgt[2] / tgt[3], dst)
+                tgt = self.pushed(scene, ev.kind, tgt)
                 layers += self.background_layers(bg or "blur", stream, t, cover, dst, shape, radius)
                 layers.append({"type": "video", "src": stream, "t": round(t, 4), "rect": rr(tgt), "dst": rr(inner),
                                "shape": "round", "radius": r1(self.style["radius"] * self.unit)})
@@ -887,6 +928,7 @@ class OutputResolver:
             else:
                 self.prev = None
             self.evals.pop(scene["index"], None)  # fresh state when a scene (re)starts
+            self.scene_t0[scene["index"]] = self.clock
         views = []
         layers = []
         # A transition lasts the frames that start before its end: round() keeps float noise from

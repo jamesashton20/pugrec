@@ -44,6 +44,9 @@ DEFAULT_STYLE = {  # = the PugPal look; a theme (style.theme) or edit.yaml's sty
               "aspect": "auto",        # auto (camera: fill the room; others: the target's shape) or "W:H"
               "position": [0.5, 0.5],  # where the card sits in the free space (0 = left/top)
               "shadow": 0},            # 0 = none (the PugPal look) .. 1 = strong
+    # Slow push-in while a shot holds (Ken Burns): {to: 0.8, over: 10} = the view shrinks to 80%
+    # over 10 s. null = off; scenes say `push: true` (or a theme sets it here).
+    "push": None,
     # One window sharp, the rest of the screen blurred + dimmed: {window: SEL, blur, dim}. Off by default.
     "spotlight": None,
     "transition": {"move": 0.6},       # default between scenes
@@ -250,7 +253,8 @@ def bubble(v, path, base):
     return out
 
 
-SCENE_KEYS = ["at", "source", "shot", "fit", "background", "inset", "transition", "bubble", "spotlight", "label"]
+SCENE_KEYS = ["at", "source", "shot", "fit", "background", "inset", "push", "transition", "bubble", "spotlight",
+              "label"]
 
 
 def spotlight(v, path, base):
@@ -283,6 +287,9 @@ def _scene(v, path, out_names, style, sources):
         _err(f"{path}.fit", f"expected one of {', '.join(FITS)}, got {fit!r}")
     sc["fit"] = fit
     sc["background"] = _background(v["background"], f"{path}.background") if "background" in v else None
+    sc["push_raw"] = v.get("push", "style")
+    if sc["push_raw"] != "style":
+        push(sc["push_raw"], f"{path}.push")  # validate now
     sc["inset_raw"] = v.get("inset")
     if sc["inset_raw"] is not None:
         inset(sc["inset_raw"], f"{path}.inset", DEFAULT_STYLE["inset"])  # validate now
@@ -322,6 +329,9 @@ def scene_for_output(sc, output, style, path, bubble_base=None):
     # Spotlight: per scene (not sticky) - the scene's value, else the style's.
     sp = ov["spotlight"] if ov and "spotlight" in ov else sc.get("spotlight_raw", "style")
     s["spotlight"] = style["spotlight"] if sp == "style" else spotlight(sp, f"{path}.spotlight", style["spotlight"])
+    # Push-in: the scene's (or this output's override), else the style's. Not sticky.
+    pr = ov["push"] if ov and "push" in ov else sc.get("push_raw", "style")
+    s["push"] = style["push"] if pr == "style" else push(pr, f"{path}.push")
     # Inset: the style's <- the scene's <- a pane's own.
     ins_raw = ov["inset"] if ov and "inset" in ov else sc.get("inset_raw")
     s["inset"] = inset(ins_raw, f"{path}.inset", style["inset"])
@@ -632,6 +642,20 @@ def inset(v, path, base):
     return out
 
 
+def push(v, path):
+    """Scene/style push-in: false/null = off; true = the default (0.8 on wide outputs, 0.9 on tall
+    ones, over 10 s); a number = `to`; {to, over}."""
+    if v is None or v is False:
+        return None
+    if v is True:
+        return {"to": None, "over": 10.0}
+    if isinstance(v, (int, float)):
+        return {"to": _num(v, path, 0.5, 0.99), "over": 10.0}
+    _keys(v, path, ["to", "over"])
+    return {"to": _num(v["to"], f"{path}.to", 0.5, 0.99) if v.get("to") is not None else None,
+            "over": _num(v.get("over", 10.0), f"{path}.over", 1, 120)}
+
+
 def _background(v, path):
     if v in ("blur", "backdrop") or (isinstance(v, str) and v.startswith("#") and len(v) == 7):
         return v
@@ -770,6 +794,8 @@ def apply_style(style, st, path, base_dir):
             style[k] = backdrop_style(v, p, style[k], base_dir)
         elif k == "inset":
             style[k] = inset(v, p, style[k])
+        elif k == "push":
+            style[k] = push(v, p)
         else:
             style[k] = _num(v, p, 0)
     return style
