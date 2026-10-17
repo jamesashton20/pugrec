@@ -75,7 +75,8 @@ coordinates**, as Hyprland reports them. Screen video pixels:
 
 **Window state:** `address`, `class`, `title`, `at` [x, y], `size` [w, h], `workspace` (id),
 `floating`, `fullscreen` (0/1/2), `monitor` (index), `mapped`, `hidden`, `pid`.
-A window is visible when its `workspace` is its monitor's `workspace` or `special`.
+A window is visible when its `workspace` is its monitor's `workspace` or `special`. A window that isn't visible has an
+empty `title` (privacy: other workspaces aren't in the picture); it comes back when it is.
 
 **Monitor state:** `name`, `x`, `y`, `width`, `height` (pixels), `scale`, `transform`,
 `workspace` (active id), `special` (special workspace id, 0 = none), `focused`, `locked`.

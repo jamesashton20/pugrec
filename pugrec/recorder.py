@@ -331,11 +331,11 @@ class Session:
 
         def poll():
             mono = time.monotonic_ns()
-            new = {c["address"]: hypr.window_state(c) for c in hypr.j("clients")}
+            mons = list(map(hypr.monitor_state, hypr.j("monitors")))  # first: titles depend on what's shown
+            new = hypr.blank_offscreen_titles({c["address"]: hypr.window_state(c) for c in hypr.j("clients")}, mons)
             for rec in hypr.diff_windows(state["w"], new):
                 self.emit(rec, mono)
             state["w"] = new
-            mons = list(map(hypr.monitor_state, hypr.j("monitors")))
             self.locked = any(m["locked"] for m in mons)
             for m in mons:
                 old = state["m"].get(m["name"])
@@ -729,7 +729,7 @@ class Session:
         self.monitor = mon["name"]
         if self.args.countdown > 0:
             self.start_overlay(self.args.countdown)
-        clients = {c["address"]: hypr.window_state(c) for c in hypr.j("clients")}
+        clients = hypr.blank_offscreen_titles({c["address"]: hypr.window_state(c) for c in hypr.j("clients")}, mons)
         active = hypr.j("activewindow") or {}
         self.focus = {"class": active.get("class", ""), "title": active.get("title", "")}
         self.locked = any(m["locked"] for m in mons)
