@@ -1,8 +1,8 @@
 # Operating pugrec - a guide for agents
 
-pugrec records product demos on James's PugPal desktop (Fedora + Hyprland, a 5120x2160
+pugrec records product demos on the author's PugPal desktop (Fedora + Hyprland, a 5120x2160
 monitor) and turns them into edited videos. This guide is for software (an AI agent, a script)
-that operates it on James's behalf. It says what to run, in what order, what every step
+that operates it on the author's behalf. It says what to run, in what order, what every step
 produces, how to check the result, and which steps need a human.
 
 - Repo: `~/git/pugrec`. Run everything as `pugrec <command>` (on PATH: `~/.local/bin/pugrec`
@@ -14,12 +14,12 @@ produces, how to check the result, and which steps need a human.
 
 ## 1. Rules
 
-1. **Recording needs James.** He has to be at the computer: he does the demo, and key capture
-   (`--keys`) asks for his password. Don't start a recording on your own initiative.
+1. **Recording needs the author.** They have to be at the computer: they do the demo, and key capture
+   (`--keys`) asks for their password. Don't start a recording on your own initiative.
 2. **No system changes.** No `sudo`, no package installs, no edits outside the repo and the
    session folders, no killing processes you didn't start. If something seems to need one, ask.
-3. **Don't open browser tabs or pop things up on his screen unasked.** Use `preview --no-open`
-   when you only need the server, and tell James the URL.
+3. **Don't open browser tabs or pop things up on their screen unasked.** Use `preview --no-open`
+   when you only need the server, and tell the author the URL.
 4. **Never delete recordings** (`~/Videos/PugRec/*`). Derived files (listed below) can be
    regenerated; `screen.mkv`, `camera.mkv` and `session.jsonl` can't.
 5. **Don't overwrite an `edit.yaml` you didn't write** without reading it first. `pugrec draft`
@@ -40,7 +40,7 @@ latest recording: `ls -t ~/Videos/PugRec | head -1`).
 | `mic-clean.flac` | `audio` | the mic cleaned up; the build uses it automatically |
 | `transcript.jsonl` | `transcript` | words with timestamps |
 | `faces.jsonl` | `faces` (build/preview make it on demand) | webcam face track |
-| `edit.yaml` | you, James, or `draft` | the scene script: what the final video shows (EDIT.md) |
+| `edit.yaml` | you, the author, or `draft` | the scene script: what the final video shows (EDIT.md) |
 | `edit.draft.yaml` | `draft` | a draft, when `edit.yaml` already exists |
 | `proxy/` | `preview` / `proxy` | browser copies of the videos |
 | `build-<output>.mp4` | `build` | the finished videos |
@@ -48,15 +48,15 @@ latest recording: `ls -t ~/Videos/PugRec | head -1`).
 All times in these files are on one clock: **seconds (or ns) since the start of the screen
 video**. `edit.yaml` uses the same seconds ("source seconds").
 
-## 3. Recording (with James)
+## 3. Recording (with the author)
 
 ```bash
-pugrec record                    # in a terminal James can see
+pugrec record                    # in a terminal the author can see
 ```
-What happens, in order (James usually starts it with **Super+Alt+R** or the Stream Deck Rec key,
+What happens, in order (the author usually starts it with **Super+Alt+R** or the Stream Deck Rec key,
 both `pugrec toggle`; a second press stops it):
 1. Only with `--keys` (or `keys = true` in config.toml): the **password prompt** for key capture;
-   James types it, and nothing else starts before it. Without it there's no prompt: clicks are
+   the author types it, and nothing else starts before it. Without it there's no prompt: clicks are
    read without root.
 2. The **overlay**: the screen dims, a spinner says "Starting camera…" while the screen and camera
    recorders start (Cancel / Esc works).
@@ -71,11 +71,11 @@ screen video stalled (cursor kept moving after the last video frame).
 Useful flags: `--keys` (also key presses; password prompt), `--no-keys` (overrides config),
 `--no-input` (no keys, no clicks), `--countdown N`
 (`0` = none), `--no-camera`, `--no-mic`, `--mic SOURCE`, `--dir DIR`.
-For a test recording without James (e.g. checking the pipeline): `--countdown 0` (no `--keys`)
+For a test recording without the author (e.g. checking the pipeline): `--countdown 0` (no `--keys`)
 into a temp `--dir`, and stop it with SIGINT (Ctrl+C) or `pugrec stop`.
 
 If the mic is muted, a critical notification says so and the audio is silence. pugrec never
-unmutes it (that's James's privacy switch, the Stream Deck "Mic" key / `hotmic`).
+unmutes it (that's the author's privacy switch, the Stream Deck "Mic" key / `hotmic`).
 
 **Check a recording:**
 ```bash
@@ -192,7 +192,7 @@ Rules that matter:
   clicks. `camera` for the intro/outro, `window` when talking about an app, `cursor` around
   clicks (start ~0.5 s before the first click), `split` (window + camera) while waiting for
   something on screen and talking about it.
-- *Presenter / card-on-a-stage look* - an option, not a default; use it when James asks for that
+- *Presenter / card-on-a-stage look* - an option, not a default; use it when the author asks for that
   look ("like a YouTuber", "polished", "the camera in a card", "the app floating on a background")
   or it clearly suits the purpose, and keep everything else as you would anyway:
   - talking head beside the app: `split: [{window: SEL}, {camera: {}, fit: inset, inset: {aspect:
@@ -201,12 +201,17 @@ Rules that matter:
   - intro/outro as a camera card: `shot: camera, fit: inset` (a `move` from a full-frame camera
     lifts it in).
   The backdrop comes from the theme (`style.backdrop`); without one it's the PugPal gradient. Keep
-  `shadow` at 0 unless the theme or James wants one. Look at a built frame: the card should have
+  `shadow` at 0 unless the theme or the author wants one. Look at a built frame: the card should have
   even room around it and nothing important cut off.
 - *Slow push-in* - also an option, not a default: `push: true` on a scene that holds a while
   (a talking-head intro/outro, a long camera or window shot, an inset card) makes it feel alive.
-  Skip it on short scenes (< ~3 s) and on cursor/auto shots. Use it when James asks for motion /
+  Skip it on short scenes (< ~3 s) and on cursor/auto shots. Use it when the author asks for motion /
   "Ken Burns" / "zoom in slowly", or with the presenter look above.
+- *Punch-in* - an option for emphasis: `punch: <s>` on a camera scene, `at` on the stressed
+  word of the point being made (from transcript.jsonl). Use few (one per ~30 s at most, or they
+  stop meaning anything), on talking-head shots - not on the app, and never in a scene with
+  `push` (drop the push). Use it when the author asks for
+  emphasis / "punch in" / "zoom on that line".
 - *Vertical output:* give it tighter shots via `vertical:` overrides (cursor zoom 1.2-1.4).
 - *For a customer / brand:* `style: {theme: <name>}` (`pugrec themes` lists them; an unknown name
   is an error listing the installed ones), plus `intro: {title, subtitle}` / `outro:` title cards
@@ -221,7 +226,7 @@ On success it prints each output's length and every scene with its source and ou
 plus warnings. Fix errors; read warnings (e.g. a `move` that had to become a fade, a window
 selector that matched nothing). A scene shown as "not shown (cut)" lies entirely in a removed range.
 
-## 8. Preview (for James) and build
+## 8. Preview (for the author) and build
 
 ```bash
 pugrec preview SESSION                 # browser page; updates whenever edit.yaml is saved
@@ -267,17 +272,17 @@ can't look at images, at least compare durations and audio levels.
 | --- | --- |
 | `info` shows no duration | the recorder crashed or is still running (`pugrec stop`) |
 | Audio is silence (-91 dB) | the mic was muted while recording; nothing to recover, record again |
-| `key` count is 0 | recorded without `--keys` (the default), or James dismissed the password prompt (then only the mouse was captured) |
-| No camera stream | camera unplugged / busy; `notice` lines in `session.jsonl` say which. Busy "in use by" a meeting/loopback camera program: that program holds the BRIO - pugrec records the real camera, never the loopback, so it has to let go of it (James's call) |
+| `key` count is 0 | recorded without `--keys` (the default), or the author dismissed the password prompt (then only the mouse was captured) |
+| No camera stream | camera unplugged / busy; `notice` lines in `session.jsonl` say which. Busy "in use by" a meeting/loopback camera program: that program holds the BRIO - pugrec records the real camera, never the loopback, so it has to let go of it (the author's call) |
 | `preview`: address in use | another server on the port; pugrec moves to the next free port and prints it |
-| `transcript`: whisper-cli missing | `scripts/build-whisper.sh` (builds it in a distrobox; James's go-ahead first) |
+| `transcript`: whisper-cli missing | `scripts/build-whisper.sh` (builds it in a distrobox; the author's go-ahead first) |
 | `check`: "no window matches" | the selector matched nothing at that scene's start: use an `address` from the draft header |
 | Captions spell a name wrong | `style.captions.fix: {Wrong: Right}` |
 | A notification popped up over the demo window | the spotlight can't hide things *on top of* the window: cut that moment or use another shot |
 
 ## Worked example: a product demo with a false start
 
-James started recording on workspace 1, did the demo on workspace 2, went back to 1 to stop,
+The author started recording on workspace 1, did the demo on workspace 2, went back to 1 to stop,
 and fumbled the first take. What was done:
 1. `info`: 112.5 s, keys/clicks captured, mic live, `start` marker at 6.5 s.
 2. `session.jsonl`: workspace 2 from 7.2 s to 111.0 s.
@@ -287,7 +292,7 @@ and fumbled the first take. What was done:
    wait removed); scenes from the transcript and the click times (camera intro, the browser
    window, cursor zooms around clicks, a split while the app works); spotlight on the browser
    window; a caption fix for the product name.
-5. `check` (no warnings), `preview` for James, `build`: two 86.4 s videos.
+5. `check` (no warnings), `preview` for the author, `build`: two 86.4 s videos.
 
 ## Appendix: the complete `edit.yaml` reference
 
@@ -356,6 +361,7 @@ Each scene lasts until the next scene's `at`.
 | `background` | behind a `contain` view or an `inset` card: `blur` (contain's default), `backdrop` (inset's default: the style's backdrop) or a colour `"#16171a"` |
 | `inset` | for `fit: inset`: `{padding, radius, aspect, position, shadow}` over `style.inset` (below) |
 | `push` | a slow push-in while the shot holds: `true`, a number (`to`), `{to, over}`, or `false` (default: the style's, off) - below |
+| `punch` | a quick punch-in on an important point: a source time (when the zoom lands), a list of them, or `{at, zoom, dip, hold}` items (default: none) - below |
 | `transition` | into this scene: `cut`, `{move: s}`, `{fade: s}` (default `{move: 0.6}`) |
 | `bubble` | camera bubble: `{corner, size, margin, shape, show}`, `false` to hide, `true` to show. **Sticky**: applies until a later scene changes it |
 | `spotlight` | `false` / `true` / `{window, blur, dim}` for this scene only (default: the style's) |
@@ -443,6 +449,28 @@ cards (the card stays, the picture tightens). Not on `cursor`/`auto` shots (they
 `check` warns). `push: true` is 0.8 on wide outputs and 0.9 on tall ones: the camera is 1080p and
 a 9:16 frame already enlarges it ~1.8x, so a full push there gets soft (an explicit `to` is used as is).
 
+#### Punch: a quick zoom in on an important point
+
+```yaml
+  - at: 4.6
+    shot: camera
+    punch: 12.4                                # the zoom lands at 12.4 s (source): put it on the word
+  - at: 30
+    shot: camera
+    punch: [33.1, {at: 41.0, zoom: 0.15, hold: 3}]
+```
+The YouTuber's emphasis zoom: the view pulls back 0.6% (`dip`, the anticipation), snaps in 6%
+(`zoom`) in 0.3 s with a slight overshoot, lands on `at`, holds `hold` s (1.5) and snaps back out
+over 0.3 s. The move starts 0.45 s before `at`, so `at` is the stressed word in the transcript.
+Defaults come from `style.punch: {zoom: 0.06, dip: 0.006, hold: 1.5}`; `dip: 0` = straight in.
+Keep it subtle: 10% looked overdone on a talking head. It
+runs on the video as watched (a cut inside it doesn't jump or end it); one whose start was cut
+away still fires when the source is inside it. It works where `push` does (camera, window,
+screen, rect; full frame, panes, `contain`, inset cards - the card stays). Not together with
+`push` in one scene: the two moves fight (`check` warns).
+A view already showing the whole source has no room for the dip, so it's skipped there. Not on
+`cursor`/`auto` shots; `check` warns about those and about a punch after its scene ends.
+
 #### Spotlight: one window sharp, the rest of the screen blurred
 
 ```yaml
@@ -514,6 +542,7 @@ style:
      image: null}            # or an image (PNG/JPEG/WebP, cover-cropped); setting one replaces the other
   inset: {padding: 0.06, radius: 18, aspect: auto, position: [0.5, 0.5], shadow: 0}   # fit: inset defaults
   push: null                 # e.g. {to: 0.8, over: 10}: every scene pushes in unless it says push: false
+  punch: {zoom: 0.06, dip: 0.006, hold: 1.5}  # defaults for scenes' punch-ins
   transition: {move: 0.6}    # default transition
 ```
 The bubble hides automatically when the shot itself shows the camera. Captions appear when the
